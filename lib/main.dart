@@ -86,6 +86,7 @@ class SecureStorageService {
     if (currentPasscode == null || currentPasscode.isEmpty) {
       await _storage.write(key: _keyPasscode, value: _defaultPasscode);
       
+      // Khởi tạo một số tài khoản mẫu ban đầu
       final defaultList = [
         CredentialItem(
           id: 'demo_google',
@@ -206,7 +207,7 @@ class BackupService {
   static Future<void> exportAndShare({
     required BuildContext context,
     required List<CredentialItem> items,
-    required String format,
+    required String format, // 'csv' hoặc 'txt'
   }) async {
     final content = format == 'csv' ? exportToCSV(items) : exportToTXT(items);
     final dir = await getTemporaryDirectory();
@@ -397,7 +398,6 @@ class _PasscodeScreenState extends State<PasscodeScreen>
                 color: Colors.white,
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
               ),
             ),
             const SizedBox(height: 8),
@@ -405,26 +405,43 @@ class _PasscodeScreenState extends State<PasscodeScreen>
             Text(
               _message,
               style: TextStyle(
-                color: _isError ? const Color(0xFFEF4444) : const Color(0xFF94A3B8),
-                fontSize: 13,
+                color: _isError ? const Color(0xFFF87171) : const Color(0xFF94A3B8),
+                fontSize: 14,
               ),
             ),
+            const SizedBox(height: 12),
+
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'Mã mặc định: 123456',
+                style: TextStyle(color: Color(0xFF38BDF8), fontSize: 12),
+              ),
+            ),
+
             const SizedBox(height: 36),
 
+            // 6 Chấm tròn PIN dots
             AnimatedBuilder(
               animation: _shakeController,
               builder: (context, child) {
-                final offset = sin(_shakeController.value * pi * 4) * 8;
+                final double offset = 10 *
+                    (1 - _shakeController.value) *
+                    ((_shakeController.value * 6).toInt().isEven ? 1 : -1);
                 return Transform.translate(
-                  offset: Offset(offset, 0),
+                  offset: Offset(_isError ? offset : 0, 0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(6, (index) {
                       final isFilled = index < _enteredCode.length;
                       return Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 9),
-                        width: 14,
-                        height: 14,
+                        margin: const EdgeInsets.symmetric(horizontal: 8),
+                        width: 16,
+                        height: 16,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: isFilled
@@ -446,6 +463,7 @@ class _PasscodeScreenState extends State<PasscodeScreen>
 
             const Spacer(flex: 2),
 
+            // Bàn phím số Keypad tối giản
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 40),
               child: Column(
@@ -560,6 +578,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   
+  // Mặc định hiển thị pass trực tiếp khi mở tài khoản. Set này chỉ lưu khi người dùng bấm che tạm thời
   final Set<String> _maskedPasswordIds = {};
   String? _expandedItemId;
 
@@ -667,6 +686,279 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _openChangePasscodeDialog() async {
+    final oldPassController = TextEditingController();
+    final newPassController = TextEditingController();
+    final confirmPassController = TextEditingController();
+    String? errorMessage;
+    bool obscureCurrent = true;
+    bool obscureNew = true;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: const [
+              Icon(Icons.key_rounded, color: Color(0xFF0284C7), size: 24),
+              SizedBox(width: 8),
+              Text('Đổi Mã PIN 6 Số', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Mã PIN 6 số bảo vệ kho mật khẩu khi khởi động ứng dụng hoặc khi chuyển ra nền.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                ),
+                const SizedBox(height: 16),
+
+                // 1. PIN hiện tại
+                TextField(
+                  controller: oldPassController,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  obscureText: obscureCurrent,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(
+                    labelText: 'Mã PIN hiện tại *',
+                    hintText: 'Mặc định ban đầu: 123456',
+                    labelStyle: const TextStyle(fontSize: 12),
+                    counterText: '',
+                    prefixIcon: const Icon(Icons.lock_open_rounded, size: 20),
+                    suffixIcon: IconButton(
+                      icon: Icon(obscureCurrent ? Icons.visibility_off : Icons.visibility, size: 18),
+                      onPressed: () => setDialogState(() => obscureCurrent = !obscureCurrent),
+                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // 2. PIN 6 số mới
+                TextField(
+                  controller: newPassController,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  obscureText: obscureNew,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(
+                    labelText: 'Mã PIN 6 số mới *',
+                    hintText: 'Nhập 6 số mới',
+                    labelStyle: const TextStyle(fontSize: 12),
+                    counterText: '',
+                    prefixIcon: const Icon(Icons.key_rounded, size: 20),
+                    suffixIcon: IconButton(
+                      icon: Icon(obscureNew ? Icons.visibility_off : Icons.visibility, size: 18),
+                      onPressed: () => setDialogState(() => obscureNew = !obscureNew),
+                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // 3. Xác nhận PIN mới
+                TextField(
+                  controller: confirmPassController,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  obscureText: obscureNew,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(
+                    labelText: 'Xác nhận mã PIN mới *',
+                    hintText: 'Nhập lại đúng 6 số mới',
+                    labelStyle: const TextStyle(fontSize: 12),
+                    counterText: '',
+                    prefixIcon: const Icon(Icons.check_circle_outline, size: 20),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
+
+                if (errorMessage != null) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEE2E2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFF87171)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 16),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            errorMessage!,
+                            style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0F172A),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () async {
+                final oldP = oldPassController.text.trim();
+                final newP = newPassController.text.trim();
+                final confP = confirmPassController.text.trim();
+
+                final isOldValid = await widget.storageService.verifyPasscode(oldP);
+                if (!isOldValid) {
+                  setDialogState(() {
+                    errorMessage = 'Mã PIN hiện tại không chính xác!';
+                  });
+                  return;
+                }
+
+                if (newP.length != 6 || !RegExp(r'^[0-9]{6}$').hasMatch(newP)) {
+                  setDialogState(() {
+                    errorMessage = 'Mã PIN mới phải gồm đúng 6 chữ số!';
+                  });
+                  return;
+                }
+
+                if (newP != confP) {
+                  setDialogState(() {
+                    errorMessage = 'Mã PIN xác nhận không trùng khớp!';
+                  });
+                  return;
+                }
+
+                await widget.storageService.updatePasscode(newP);
+                Navigator.pop(ctx);
+                HapticFeedback.mediumImpact();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Row(
+                        children: [
+                          Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
+                          SizedBox(width: 8),
+                          Text('Đã đổi mã PIN 6 số thành công!'),
+                        ],
+                      ),
+                      backgroundColor: Color(0xFF0F172A),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Lưu Mã PIN Mới'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openBackupDialog() async {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Cài Đặt Bảo Mật & Sao Lưu Dữ Liệu',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Đổi mã PIN mở khóa hoặc xuất file cất giữ để khôi phục khi đổi máy:',
+              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFE0F2FE),
+                child: Icon(Icons.key_rounded, color: Color(0xFF0284C7)),
+              ),
+              title: const Text('Đổi mã khóa PIN 6 số', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              subtitle: const Text('Thay đổi mật mã mở khóa ứng dụng khi khởi động', style: TextStyle(fontSize: 12)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openChangePasscodeDialog();
+              },
+            ),
+            const Divider(),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFDCFCE7),
+                child: Icon(Icons.table_chart_outlined, color: Color(0xFF16A34A)),
+              ),
+              title: const Text('Xuất file Excel / CSV (.csv)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              subtitle: const Text('Mở xem và chỉnh sửa được bằng Excel, Google Sheets', style: TextStyle(fontSize: 12)),
+              onTap: () {
+                Navigator.pop(ctx);
+                BackupService.exportAndShare(context: context, items: _credentials, format: 'csv');
+              },
+            ),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFDBEAFE),
+                child: Icon(Icons.description_outlined, color: Color(0xFF2563EB)),
+              ),
+              title: const Text('Xuất file Văn bản (.txt)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              subtitle: const Text('Xem trên Notepad, Word, lưu trữ cá nhân hoặc gửi tin nhắn', style: TextStyle(fontSize: 12)),
+              onTap: () {
+                Navigator.pop(ctx);
+                BackupService.exportAndShare(context: context, items: _credentials, format: 'txt');
+              },
+            ),
+            const Divider(),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFF3E8FF),
+                child: Icon(Icons.file_download_outlined, color: Color(0xFF9333EA)),
+              ),
+              title: const Text('Nhập khôi phục dữ liệu (Import)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              subtitle: const Text('Dán nội dung từ file .csv, .txt hoặc .json để phục hồi toàn bộ tài khoản', style: TextStyle(fontSize: 12)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showImportDialog();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _showImportDialog() async {
     final textController = TextEditingController();
     await showDialog(
@@ -758,80 +1050,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _openBackupDialog() async {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Sao Lưu & Xuất / Nhập Dữ Liệu',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Xuất file để cất giữ an toàn hoặc nhập lại khi cài lại app trên điện thoại mới:',
-              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFDCFCE7),
-                child: Icon(Icons.table_chart_outlined, color: Color(0xFF16A34A)),
-              ),
-              title: const Text('Xuất file Excel / CSV (.csv)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Mở xem và chỉnh sửa được bằng Excel, Google Sheets', style: TextStyle(fontSize: 12)),
-              onTap: () {
-                Navigator.pop(ctx);
-                BackupService.exportAndShare(context: context, items: _credentials, format: 'csv');
-              },
-            ),
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFDBEAFE),
-                child: Icon(Icons.description_outlined, color: Color(0xFF2563EB)),
-              ),
-              title: const Text('Xuất file Văn bản (.txt)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Xem trên Notepad, Word, lưu trữ cá nhân hoặc gửi tin nhắn', style: TextStyle(fontSize: 12)),
-              onTap: () {
-                Navigator.pop(ctx);
-                BackupService.exportAndShare(context: context, items: _credentials, format: 'txt');
-              },
-            ),
-            const Divider(),
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFF3E8FF),
-                child: Icon(Icons.file_download_outlined, color: Color(0xFF9333EA)),
-              ),
-              title: const Text('Nhập khôi phục dữ liệu (Import)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Dán nội dung từ file .csv, .txt hoặc .json để phục hồi toàn bộ tài khoản', style: TextStyle(fontSize: 12)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showImportDialog();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -850,7 +1068,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Sao lưu & Xuất/Nhập file',
+            tooltip: 'Đổi mã PIN 6 số',
+            icon: const Icon(Icons.key_rounded, color: Color(0xFF0284C7)),
+            onPressed: _openChangePasscodeDialog,
+          ),
+          IconButton(
+            tooltip: 'Sao lưu & Cài đặt',
             icon: const Icon(Icons.folder_shared_outlined, color: Color(0xFF0284C7)),
             onPressed: _openBackupDialog,
           ),
@@ -939,6 +1162,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Column(
         children: [
+          // DÒNG SIÊU GỌN (1-2 DÒNG): Bấm vào tên tài khoản hiển thị mật khẩu ngay
           InkWell(
             borderRadius: BorderRadius.circular(12),
             onTap: () {
@@ -964,6 +1188,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(width: 10),
 
+                  // Dòng 1: Tên dịch vụ + Tag; Dòng 2: Username
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1013,6 +1238,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
 
+                  // Nút copy username
                   IconButton(
                     tooltip: 'Sao chép Username',
                     icon: const Icon(Icons.copy_rounded, size: 16, color: Color(0xFF94A3B8)),
@@ -1020,6 +1246,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     visualDensity: VisualDensity.compact,
                   ),
 
+                  // Mũi tên chỉ thị
                   Icon(
                     isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
                     color: isExpanded ? const Color(0xFF0284C7) : const Color(0xFF94A3B8),
@@ -1030,6 +1257,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
+          // KHU VỰC HIỂN THỊ MẬT KHẨU TRỰC TIẾP KHI BẤM VÀO TÀI KHOẢN
           if (isExpanded)
             Container(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
@@ -1041,6 +1269,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const Divider(height: 12, color: Color(0xFFE2E8F0)),
 
+                  // Khung Mật khẩu dạng rõ trực tiếp
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
@@ -1069,6 +1298,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        // Nút Copy Pass nổi bật 1 chạm
                         ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF0F172A),
@@ -1110,6 +1340,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                   const SizedBox(height: 6),
 
+                  // Nút Sửa & Xóa
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
@@ -1373,6 +1604,7 @@ class _PassLockAppState extends State<PassLockApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Tự động khóa lại màn hình khi ứng dụng bị ẩn hoặc chuyển ra nền
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       if (_isUnlocked) {
         setState(() {
