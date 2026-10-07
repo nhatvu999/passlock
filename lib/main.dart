@@ -127,6 +127,17 @@ class SecureStorageService {
     await _storage.write(key: _keyPasscode, value: newPasscode);
   }
 
+  static const String _keyThemeMode = 'app_theme_mode';
+
+  Future<bool> getIsDarkMode() async {
+    final val = await _storage.read(key: _keyThemeMode);
+    return val == 'dark';
+  }
+
+  Future<void> saveIsDarkMode(bool isDark) async {
+    await _storage.write(key: _keyThemeMode, value: isDark ? 'dark' : 'light');
+  }
+
   Future<List<CredentialItem>> getCredentials() async {
     final rawJson = await _storage.read(key: _keyCredentials);
     if (rawJson == null || rawJson.isEmpty) return [];
@@ -561,11 +572,15 @@ class _PasscodeScreenState extends State<PasscodeScreen>
 class HomeScreen extends StatefulWidget {
   final SecureStorageService storageService;
   final VoidCallback onLock;
+  final bool isDarkMode;
+  final ValueChanged<bool> onThemeChanged;
 
   const HomeScreen({
     super.key,
     required this.storageService,
     required this.onLock,
+    required this.isDarkMode,
+    required this.onThemeChanged,
   });
 
   @override
@@ -577,15 +592,30 @@ class _HomeScreenState extends State<HomeScreen> {
   List<CredentialItem> _filteredCredentials = [];
   bool _isLoading = true;
   String _searchQuery = '';
-  
-  // Mặc định hiển thị pass trực tiếp khi mở tài khoản. Set này chỉ lưu khi người dùng bấm che tạm thời
-  final Set<String> _maskedPasswordIds = {};
+  late bool _isDarkMode;
   String? _expandedItemId;
 
   @override
   void initState() {
     super.initState();
+    _isDarkMode = widget.isDarkMode;
     _loadData();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isDarkMode != widget.isDarkMode) {
+      _isDarkMode = widget.isDarkMode;
+    }
+  }
+
+  Future<void> _toggleTheme() async {
+    final next = !_isDarkMode;
+    setState(() => _isDarkMode = next);
+    await widget.storageService.saveIsDarkMode(next);
+    widget.onThemeChanged(next);
+    HapticFeedback.selectionClick();
   }
 
   Future<void> _loadData() async {
@@ -630,16 +660,6 @@ class _HomeScreenState extends State<HomeScreen> {
         duration: const Duration(seconds: 2),
       ),
     );
-  }
-
-  void _togglePasswordVisibility(String id) {
-    setState(() {
-      if (_maskedPasswordIds.contains(id)) {
-        _maskedPasswordIds.remove(id);
-      } else {
-        _maskedPasswordIds.add(id);
-      }
-    });
   }
 
   Future<void> _openAddEditModal([CredentialItem? existing]) async {
@@ -904,6 +924,35 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
             ListTile(
+              leading: CircleAvatar(
+                backgroundColor: _isDarkMode ? const Color(0xFF334155) : const Color(0xFFFEF3C7),
+                child: Icon(
+                  _isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+                  color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFFD97706),
+                ),
+              ),
+              title: Text(
+                _isDarkMode ? 'Giao diện Tối (Đang bật)' : 'Giao diện Sáng (Đang bật)',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              subtitle: Text(
+                _isDarkMode ? 'Nền đen mờ OLED tiết kiệm pin, bấm để đổi nền sáng' : 'Nền sáng tiêu chuẩn, bấm để chuyển nền tối',
+                style: const TextStyle(fontSize: 12),
+              ),
+              trailing: Switch(
+                value: _isDarkMode,
+                onChanged: (val) {
+                  Navigator.pop(ctx);
+                  _toggleTheme();
+                },
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _toggleTheme();
+              },
+            ),
+            const Divider(),
+            ListTile(
               leading: const CircleAvatar(
                 backgroundColor: Color(0xFFE0F2FE),
                 child: Icon(Icons.key_rounded, color: Color(0xFF0284C7)),
@@ -1053,20 +1102,45 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _isDarkMode ? const Color(0xFF090D16) : const Color(0xFFF8FAFC),
       appBar: AppBar(
+        backgroundColor: _isDarkMode ? const Color(0xFF090D16) : Colors.white,
         title: Row(
           children: [
-            const Icon(Icons.shield_outlined, color: Color(0xFF0F172A), size: 22),
+            Icon(
+              Icons.shield_outlined,
+              color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0F172A),
+              size: 22,
+            ),
             const SizedBox(width: 8),
-            const Text('PassLock Vault'),
+            Text(
+              'PassLock Vault',
+              style: TextStyle(
+                color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             const Spacer(),
             Text(
               '${_filteredCredentials.length} mục',
-              style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.normal),
+              style: TextStyle(
+                fontSize: 12,
+                color: _isDarkMode ? const Color(0xFF94A3B8) : Colors.grey,
+                fontWeight: FontWeight.normal,
+              ),
             ),
           ],
         ),
         actions: [
+          // Nút chuyển đổi giao diện Sáng / Tối
+          IconButton(
+            tooltip: _isDarkMode ? 'Chuyển sang Giao diện Sáng' : 'Chuyển sang Giao diện Tối',
+            icon: Icon(
+              _isDarkMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+              color: _isDarkMode ? const Color(0xFFFACC15) : const Color(0xFF475569),
+            ),
+            onPressed: _toggleTheme,
+          ),
           IconButton(
             tooltip: 'Đổi mã PIN 6 số',
             icon: const Icon(Icons.key_rounded, color: Color(0xFF0284C7)),
@@ -1079,7 +1153,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             tooltip: 'Khóa ngay',
-            icon: const Icon(Icons.lock_outline_rounded),
+            icon: Icon(
+              Icons.lock_outline_rounded,
+              color: _isDarkMode ? Colors.white70 : const Color(0xFF0F172A),
+            ),
             onPressed: widget.onLock,
           ),
         ],
@@ -1095,20 +1172,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   _applySearch();
                 });
               },
+              style: TextStyle(color: _isDarkMode ? Colors.white : const Color(0xFF0F172A)),
               decoration: InputDecoration(
                 hintText: 'Tìm kiếm dịch vụ, email...',
-                prefixIcon: const Icon(Icons.search, size: 18),
+                hintStyle: TextStyle(color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey),
+                prefixIcon: Icon(Icons.search, size: 18, color: _isDarkMode ? const Color(0xFF94A3B8) : Colors.grey),
                 filled: true,
-                fillColor: Colors.white,
+                fillColor: _isDarkMode ? const Color(0xFF131B2E) : Colors.white,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
+                  borderSide: BorderSide(color: _isDarkMode ? const Color(0xFF1E293B) : Colors.grey.shade300),
                 ),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey.shade200),
+                  borderSide: BorderSide(color: _isDarkMode ? const Color(0xFF1E293B) : Colors.grey.shade200),
                 ),
               ),
             ),
@@ -1117,7 +1196,12 @@ class _HomeScreenState extends State<HomeScreen> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _filteredCredentials.isEmpty
-                    ? const Center(child: Text('Chưa có tài khoản nào'))
+                    ? Center(
+                        child: Text(
+                          'Chưa có tài khoản nào',
+                          style: TextStyle(color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                        ),
+                      )
                     : ListView.builder(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                         itemCount: _filteredCredentials.length,
@@ -1131,7 +1215,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openAddEditModal(),
-        backgroundColor: const Color(0xFF0F172A),
+        backgroundColor: _isDarkMode ? const Color(0xFF0284C7) : const Color(0xFF0F172A),
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text('Thêm mới', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -1141,20 +1225,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildAccountCard(CredentialItem item) {
     final isExpanded = _expandedItemId == item.id;
-    final isMasked = _maskedPasswordIds.contains(item.id);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: _isDarkMode ? const Color(0xFF131B2E) : Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isExpanded ? const Color(0xFF0284C7) : const Color(0xFFE2E8F0),
+          color: isExpanded
+              ? const Color(0xFF0284C7)
+              : (_isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0)),
           width: isExpanded ? 1.5 : 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.02),
+            color: Colors.black.withOpacity(_isDarkMode ? 0.25 : 0.02),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -1176,11 +1261,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   CircleAvatar(
                     radius: 16,
-                    backgroundColor: const Color(0xFF0F172A).withOpacity(0.07),
+                    backgroundColor: _isDarkMode
+                        ? const Color(0xFF38BDF8).withOpacity(0.15)
+                        : const Color(0xFF0F172A).withOpacity(0.07),
                     child: Text(
                       item.service.isNotEmpty ? item.service[0].toUpperCase() : '?',
-                      style: const TextStyle(
-                        color: Color(0xFF0F172A),
+                      style: TextStyle(
+                        color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0F172A),
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
                       ),
@@ -1198,10 +1285,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             Flexible(
                               child: Text(
                                 item.service,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF0F172A),
+                                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -1210,14 +1297,14 @@ class _HomeScreenState extends State<HomeScreen> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFF1F5F9),
+                                color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
                                 item.category,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 10,
-                                  color: Color(0xFF64748B),
+                                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
@@ -1227,9 +1314,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(height: 2),
                         Text(
                           item.username,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
-                            color: Color(0xFF64748B),
+                            color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
                             fontFamily: 'monospace',
                           ),
                           overflow: TextOverflow.ellipsis,
@@ -1241,7 +1328,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   // Nút copy username
                   IconButton(
                     tooltip: 'Sao chép Username',
-                    icon: const Icon(Icons.copy_rounded, size: 16, color: Color(0xFF94A3B8)),
+                    icon: Icon(
+                      Icons.copy_rounded,
+                      size: 16,
+                      color: _isDarkMode ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                    ),
                     onPressed: () => _copyToClipboard(item.username, 'Tài khoản'),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -1249,7 +1340,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   // Mũi tên chỉ thị
                   Icon(
                     isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
-                    color: isExpanded ? const Color(0xFF0284C7) : const Color(0xFF94A3B8),
+                    color: isExpanded
+                        ? const Color(0xFF0284C7)
+                        : (_isDarkMode ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
                     size: 20,
                   ),
                 ],
@@ -1257,71 +1350,69 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          // KHU VỰC HIỂN THỊ MẬT KHẨU TRỰC TIẾP KHI BẤM VÀO TÀI KHOẢN
+          // KHU VỰC HIỂN THỊ MẬT KHẨU TRỰC TIẾP KHI BẤM VÀO TÀI KHOẢN (LUÔN HIỆN RÕ DẠNG VĂN BẢN)
           if (isExpanded)
             Container(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
-              decoration: const BoxDecoration(
-                color: Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.vertical(bottom: Radius.circular(11)),
+              decoration: BoxDecoration(
+                color: _isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(11)),
               ),
               child: Column(
                 children: [
-                  const Divider(height: 12, color: Color(0xFFE2E8F0)),
+                  Divider(
+                    height: 12,
+                    color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                  ),
 
-                  // Khung Mật khẩu dạng rõ trực tiếp
+                  // Khung Mật khẩu dạng rõ trực tiếp 100%
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: _isDarkMode ? const Color(0xFF1E293B) : Colors.white,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFCBD5E1)),
+                      border: Border.all(
+                        color: _isDarkMode ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+                      ),
                     ),
                     child: Row(
                       children: [
                         const Icon(Icons.key_outlined, size: 16, color: Color(0xFF0284C7)),
                         const SizedBox(width: 8),
-                        const Text(
+                        Text(
                           'Pass: ',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF64748B)),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                          ),
                         ),
                         Expanded(
                           child: Text(
-                            isMasked ? '••••••••••••' : item.password,
+                            item.password,
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
-                              letterSpacing: isMasked ? 2 : 0,
-                              color: const Color(0xFF0F172A),
+                              color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
                               fontFamily: 'monospace',
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        // Nút Copy Pass nổi bật 1 chạm
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0F172A),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        // NÚT COPY PASS: CHỈ ĐỂ LẠI ICON, BỎ HẲN CHỮ COPY PASS
+                        IconButton(
+                          tooltip: 'Sao chép mật khẩu',
+                          style: IconButton.styleFrom(
+                            backgroundColor: _isDarkMode
+                                ? const Color(0xFF0284C7).withOpacity(0.2)
+                                : const Color(0xFF0F172A),
+                            foregroundColor: _isDarkMode ? const Color(0xFF38BDF8) : Colors.white,
+                            padding: const EdgeInsets.all(7),
                             visualDensity: VisualDensity.compact,
-                            elevation: 0,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           ),
-                          icon: const Icon(Icons.copy_rounded, size: 13, color: Color(0xFF38BDF8)),
-                          label: const Text('Copy Pass', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          icon: const Icon(Icons.copy_rounded, size: 15),
                           onPressed: () => _copyToClipboard(item.password, 'Mật khẩu'),
-                        ),
-                        const SizedBox(width: 4),
-                        IconButton(
-                          tooltip: isMasked ? 'Hiện mật khẩu' : 'Ẩn mật khẩu',
-                          icon: Icon(
-                            isMasked ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                            size: 17,
-                            color: const Color(0xFF94A3B8),
-                          ),
-                          onPressed: () => _togglePasswordVisibility(item.id),
-                          visualDensity: VisualDensity.compact,
                         ),
                       ],
                     ),
@@ -1333,7 +1424,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       alignment: Alignment.centerLeft,
                       child: Text(
                         'Ghi chú: ${item.notes}',
-                        style: const TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Color(0xFF64748B)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontStyle: FontStyle.italic,
+                          color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                        ),
                       ),
                     ),
                   ],
@@ -1347,7 +1442,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       TextButton.icon(
                         style: TextButton.styleFrom(
                           visualDensity: VisualDensity.compact,
-                          foregroundColor: const Color(0xFF0F172A),
+                          foregroundColor: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0F172A),
                         ),
                         icon: const Icon(Icons.edit_outlined, size: 15),
                         label: const Text('Sửa', style: TextStyle(fontSize: 12)),
@@ -1589,11 +1684,24 @@ class PassLockApp extends StatefulWidget {
 
 class _PassLockAppState extends State<PassLockApp> with WidgetsBindingObserver {
   bool _isUnlocked = false;
+  bool _isDarkMode = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _initTheme();
+  }
+
+  Future<void> _initTheme() async {
+    final dark = await widget.storageService.getIsDarkMode();
+    if (mounted) {
+      setState(() => _isDarkMode = dark);
+    }
+  }
+
+  void _onThemeChanged(bool isDark) {
+    setState(() => _isDarkMode = isDark);
   }
 
   @override
@@ -1631,8 +1739,10 @@ class _PassLockAppState extends State<PassLockApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'PassLock',
       debugShowCheckedModeBanner: false,
+      themeMode: _isDarkMode ? ThemeMode.dark : ThemeMode.light,
       theme: ThemeData(
         useMaterial3: true,
+        brightness: Brightness.light,
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF0F172A),
           brightness: Brightness.light,
@@ -1652,10 +1762,34 @@ class _PassLockAppState extends State<PassLockApp> with WidgetsBindingObserver {
           ),
         ),
       ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF38BDF8),
+          brightness: Brightness.dark,
+          primary: const Color(0xFF38BDF8),
+          surface: const Color(0xFF131B2E),
+        ),
+        scaffoldBackgroundColor: const Color(0xFF090D16),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF090D16),
+          elevation: 0,
+          scrolledUnderElevation: 1,
+          iconTheme: IconThemeData(color: Colors.white),
+          titleTextStyle: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
       home: _isUnlocked
           ? HomeScreen(
               storageService: widget.storageService,
               onLock: _onManualLock,
+              isDarkMode: _isDarkMode,
+              onThemeChanged: _onThemeChanged,
             )
           : PasscodeScreen(
               storageService: widget.storageService,
