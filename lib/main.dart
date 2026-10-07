@@ -7,7 +7,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:file_picker/file_picker.dart';
 
 // ============================================================================
 // 1. MODEL DỮ LIỆU TÀI KHOẢN (ACCOUNT CREDENTIAL MODEL)
@@ -222,18 +221,6 @@ class BackupService {
     );
   }
 
-  static Future<List<CredentialItem>?> pickAndImportFile() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['csv', 'txt', 'json'],
-    );
-    if (result == null || result.files.single.path == null) return null;
-
-    final file = File(result.files.single.path!);
-    final content = await file.readAsString(encoding: utf8);
-    return parseUniversal(content);
-  }
-
   static List<CredentialItem> parseUniversal(String content) {
     final trimmed = content.trim();
     final List<CredentialItem> imported = [];
@@ -424,7 +411,6 @@ class _PasscodeScreenState extends State<PasscodeScreen>
             ),
             const SizedBox(height: 36),
 
-            // 6 chấm tròn biểu thị 6 chữ số PIN
             AnimatedBuilder(
               animation: _shakeController,
               builder: (context, child) {
@@ -460,7 +446,6 @@ class _PasscodeScreenState extends State<PasscodeScreen>
 
             const Spacer(flex: 2),
 
-            // Bàn phím số Keypad tối giản
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 40),
               child: Column(
@@ -682,6 +667,97 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showImportDialog() async {
+    final textController = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) => AlertDialog(
+          title: const Text('Khôi phục dữ liệu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Dán nội dung từ file TXT, CSV hoặc JSON đã sao lưu để phục hồi:',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF1F5F9),
+                    foregroundColor: const Color(0xFF0F172A),
+                    elevation: 0,
+                  ),
+                  icon: const Icon(Icons.paste_rounded, size: 16),
+                  label: const Text('Dán từ bộ nhớ tạm (Clipboard)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  onPressed: () async {
+                    final data = await Clipboard.getData(Clipboard.kTextPlain);
+                    if (data != null && data.text != null) {
+                      setModalState(() {
+                        textController.text = data.text!;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: textController,
+                  maxLines: 6,
+                  decoration: InputDecoration(
+                    hintText: 'Dán nội dung file sao lưu vào đây...',
+                    hintStyle: const TextStyle(fontSize: 12),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    filled: true,
+                    fillColor: const Color(0xFFF8FAFC),
+                  ),
+                  style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0F172A),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                final content = textController.text.trim();
+                if (content.isEmpty) return;
+                Navigator.pop(ctx);
+                final imported = BackupService.parseUniversal(content);
+                if (imported.isNotEmpty) {
+                  for (final item in imported) {
+                    await widget.storageService.addCredential(item);
+                  }
+                  _loadData();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Đã phục hồi thành công ${imported.length} tài khoản!')),
+                    );
+                  }
+                } else {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Không tìm thấy dữ liệu hợp lệ để phục hồi!')),
+                    );
+                  }
+                }
+              },
+              child: const Text('Khôi phục ngay'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _openBackupDialog() async {
     showModalBottomSheet(
       context: context,
@@ -743,22 +819,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 backgroundColor: Color(0xFFF3E8FF),
                 child: Icon(Icons.file_download_outlined, color: Color(0xFF9333EA)),
               ),
-              title: const Text('Nhập file khôi phục (Import)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Chọn file .csv, .txt hoặc .json đã lưu để phục hồi lại tài khoản', style: TextStyle(fontSize: 12)),
-              onTap: () async {
+              title: const Text('Nhập khôi phục dữ liệu (Import)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              subtitle: const Text('Dán nội dung từ file .csv, .txt hoặc .json để phục hồi toàn bộ tài khoản', style: TextStyle(fontSize: 12)),
+              onTap: () {
                 Navigator.pop(ctx);
-                final imported = await BackupService.pickAndImportFile();
-                if (imported != null && imported.isNotEmpty) {
-                  for (final item in imported) {
-                    await widget.storageService.addCredential(item);
-                  }
-                  _loadData();
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Đã phục hồi thành công ${imported.length} tài khoản!')),
-                    );
-                  }
-                }
+                _showImportDialog();
               },
             ),
           ],
@@ -874,7 +939,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Column(
         children: [
-          // DÒNG SIÊU GỌN (1-2 DÒNG): Bấm vào tên tài khoản hiển thị mật khẩu ngay
           InkWell(
             borderRadius: BorderRadius.circular(12),
             onTap: () {
@@ -900,7 +964,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(width: 10),
 
-                  // Dòng 1: Tên dịch vụ + Tag; Dòng 2: Username
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -950,7 +1013,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
 
-                  // Nút copy username
                   IconButton(
                     tooltip: 'Sao chép Username',
                     icon: const Icon(Icons.copy_rounded, size: 16, color: Color(0xFF94A3B8)),
@@ -958,7 +1020,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     visualDensity: VisualDensity.compact,
                   ),
 
-                  // Mũi tên chỉ thị
                   Icon(
                     isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
                     color: isExpanded ? const Color(0xFF0284C7) : const Color(0xFF94A3B8),
@@ -969,7 +1030,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          // KHU VỰC HIỂN THỊ MẬT KHẨU TRỰC TIẾP KHI BẤM VÀO TÀI KHOẢN
           if (isExpanded)
             Container(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
@@ -981,7 +1041,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const Divider(height: 12, color: Color(0xFFE2E8F0)),
 
-                  // Khung Mật khẩu dạng rõ trực tiếp
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
@@ -1010,7 +1069,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        // Nút Copy Pass nổi bật 1 chạm
                         ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF0F172A),
@@ -1052,7 +1110,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
                   const SizedBox(height: 6),
 
-                  // Nút Sửa & Xóa
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
