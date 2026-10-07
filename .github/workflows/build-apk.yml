@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # Cho phép bấm nút "Run workflow" thủ công bất kỳ lúc nào
+  workflow_dispatch:
 
 jobs:
   build:
@@ -17,56 +17,92 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Cài đặt Java JDK 17 (Đã bỏ cache: 'gradle' để không bị lỗi No file matched)
+      # 2. Cài đặt Java JDK 17
       - name: Set up Java JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # 3. Cài đặt Flutter SDK
+      # 3. Cài đặt Flutter SDK bản mới nhất
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      # 4. Tự động sinh thư mục android/ nếu repo chỉ có mỗi lib/main.dart
+      # 4. TỰ ĐỘNG TẠO PUBSPEC.YAML ĐẦY ĐỦ NẾU REPO CHƯA CÓ HOẶC THIẾU THƯ VIỆN
+      - name: Ensure pubspec.yaml has required dependencies
+        run: |
+          if [ ! -f "pubspec.yaml" ] || ! grep -q "flutter_secure_storage" pubspec.yaml; then
+            echo "⚡ Tự động tạo pubspec.yaml chuẩn với đầy đủ thư viện..."
+            cat << 'EOF' > pubspec.yaml
+name: passlock
+description: "Ứng dụng bảo mật quản lý mật khẩu cá nhân"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_secure_storage: ^9.2.2
+  share_plus: ^10.1.2
+  file_picker: ^8.1.6
+  path_provider: ^2.1.5
+  cupertino_icons: ^1.0.8
+  uuid: ^4.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+EOF
+          fi
+
+      # 5. Tự động khởi tạo thư mục android/ nếu repo chỉ có mỗi lib/main.dart
       - name: Ensure Android Structure Exists
         run: |
           if [ ! -d "android" ]; then
-            echo "⚡ Chưa có thư mục android/, tự động tạo môi trường Android chuẩn..."
+            echo "⚡ Chưa tìm thấy thư mục android/, tự động tạo môi trường Android chuẩn..."
             flutter create . --platforms=android --org=com.example
           fi
 
-      # 5. Cấp quyền thực thi cho gradlew (tránh lỗi Permission Denied)
+      # 6. Cấp quyền thực thi cho gradlew
       - name: Grant execute permission for gradlew
         run: |
           if [ -f "android/gradlew" ]; then
             chmod +x android/gradlew
           fi
 
-      # 6. Tự động cấu hình minSdkVersion 23 (Bắt buộc cho flutter_secure_storage)
-      - name: Configure Android minSdkVersion 23
+      # 7. Cấu hình compileSdk 34 và minSdk 23 (Bắt buộc cho flutter_secure_storage & share_plus)
+      - name: Configure Android SDK versions
         run: |
           if [ -f "android/app/build.gradle" ]; then
+            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle || true
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' android/app/build.gradle || true
             sed -i 's/minSdkVersion [0-9]\+/minSdkVersion 23/g' android/app/build.gradle || true
           fi
           if [ -f "android/app/build.gradle.kts" ]; then
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/g' android/app/build.gradle.kts || true
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts || true
             sed -i 's/minSdk = [0-9]\+/minSdk = 23/g' android/app/build.gradle.kts || true
           fi
 
-      # 7. Tải dependencies
+      # 8. Tải dependencies
       - name: Install Dependencies
         run: flutter pub get
 
-      # 8. Build file APK Release hoàn chỉnh
+      # 9. Build file APK Release hoàn chỉnh
       - name: Build Android Release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --no-tree-shake-icons
 
-      # 9. Đẩy file APK lên Artifacts để tải về điện thoại
+      # 10. Tải file APK lên Artifacts để tải về điện thoại ngay lập tức
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
