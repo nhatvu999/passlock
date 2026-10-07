@@ -39,7 +39,7 @@ jobs:
             flutter create . --platforms=android --org=com.example
           fi
 
-      # 5. Cài đặt các thư viện cần thiết trực tiếp bằng lệnh Flutter
+      # 5. Cài đặt các thư viện cần thiết
       - name: Add Required Dependencies
         run: |
           flutter pub add flutter_secure_storage:^9.2.2 share_plus:^10.1.2 file_picker:^8.1.6 path_provider:^2.1.5 cupertino_icons:^1.0.8 uuid:^4.4.0
@@ -52,16 +52,18 @@ jobs:
             chmod +x android/gradlew
           fi
 
-      # 7. Cấu hình compileSdk 34 và minSdk 23
+      # 7. Cấu hình compileSdk 36 và minSdk 23 (Đáp ứng yêu cầu của flutter_plugin_android_lifecycle)
       - name: Configure Android SDK versions
         run: |
           if [ -f "android/app/build.gradle" ]; then
-            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle || true
+            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle || true
+            sed -i 's/compileSdkVersion [0-9]\+/compileSdkVersion 36/g' android/app/build.gradle || true
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' android/app/build.gradle || true
             sed -i 's/minSdkVersion [0-9]\+/minSdkVersion 23/g' android/app/build.gradle || true
           fi
           if [ -f "android/app/build.gradle.kts" ]; then
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/g' android/app/build.gradle.kts || true
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts || true
+            sed -i 's/compileSdk = [0-9]\+/compileSdk = 36/g' android/app/build.gradle.kts || true
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts || true
             sed -i 's/minSdk = [0-9]\+/minSdk = 23/g' android/app/build.gradle.kts || true
           fi
@@ -70,7 +72,7 @@ jobs:
       - name: Build Android Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
-      # 9. Tải file APK lên GitHub Actions Artifacts để tải về điện thoại
+      # 9. Tải file APK lên GitHub Actions Artifacts để tải về điện thoại ngay lập tức
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
