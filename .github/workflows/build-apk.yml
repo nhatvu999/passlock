@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Kéo mã nguồn về máy ảo
+      # 1. Tải mã nguồn về máy ảo
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -24,54 +24,26 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 3. Cài đặt Flutter SDK bản mới nhất
+      # 3. Cài đặt Flutter SDK
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      # 4. TỰ ĐỘNG TẠO PUBSPEC.YAML ĐẦY ĐỦ NẾU REPO CHƯA CÓ HOẶC THIẾU THƯ VIỆN
-      - name: Ensure pubspec.yaml has required dependencies
-        run: |
-          if [ ! -f "pubspec.yaml" ] || ! grep -q "flutter_secure_storage" pubspec.yaml; then
-            echo "⚡ Tự động tạo pubspec.yaml chuẩn với đầy đủ thư viện..."
-            cat << 'EOF' > pubspec.yaml
-name: passlock
-description: "Ứng dụng bảo mật quản lý mật khẩu cá nhân"
-publish_to: 'none'
-version: 1.0.0+1
-
-environment:
-  sdk: '>=3.0.0 <4.0.0'
-
-dependencies:
-  flutter:
-    sdk: flutter
-  flutter_secure_storage: ^9.2.2
-  share_plus: ^10.1.2
-  file_picker: ^8.1.6
-  path_provider: ^2.1.5
-  cupertino_icons: ^1.0.8
-  uuid: ^4.4.0
-
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^3.0.0
-
-flutter:
-  uses-material-design: true
-EOF
-          fi
-
-      # 5. Tự động khởi tạo thư mục android/ nếu repo chỉ có mỗi lib/main.dart
-      - name: Ensure Android Structure Exists
+      # 4. Tự động khởi tạo môi trường Android nếu repo chỉ có lib/main.dart
+      - name: Initialize Android Project
         run: |
           if [ ! -d "android" ]; then
-            echo "⚡ Chưa tìm thấy thư mục android/, tự động tạo môi trường Android chuẩn..."
+            echo "⚡ Khởi tạo cấu trúc Android..."
             flutter create . --platforms=android --org=com.example
           fi
+
+      # 5. Cài đặt các thư viện cần thiết trực tiếp bằng lệnh Flutter
+      - name: Add Required Dependencies
+        run: |
+          flutter pub add flutter_secure_storage:^9.2.2 share_plus:^10.1.2 file_picker:^8.1.6 path_provider:^2.1.5 cupertino_icons:^1.0.8 uuid:^4.4.0
+          flutter pub get
 
       # 6. Cấp quyền thực thi cho gradlew
       - name: Grant execute permission for gradlew
@@ -80,7 +52,7 @@ EOF
             chmod +x android/gradlew
           fi
 
-      # 7. Cấu hình compileSdk 34 và minSdk 23 (Bắt buộc cho flutter_secure_storage & share_plus)
+      # 7. Cấu hình compileSdk 34 và minSdk 23
       - name: Configure Android SDK versions
         run: |
           if [ -f "android/app/build.gradle" ]; then
@@ -94,15 +66,11 @@ EOF
             sed -i 's/minSdk = [0-9]\+/minSdk = 23/g' android/app/build.gradle.kts || true
           fi
 
-      # 8. Tải dependencies
-      - name: Install Dependencies
-        run: flutter pub get
-
-      # 9. Build file APK Release hoàn chỉnh
+      # 8. Build file APK Release hoàn chỉnh
       - name: Build Android Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
-      # 10. Tải file APK lên Artifacts để tải về điện thoại ngay lập tức
+      # 9. Tải file APK lên GitHub Actions Artifacts để tải về điện thoại
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
