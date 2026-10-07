@@ -17,22 +17,21 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Cài đặt Java JDK 17 với actions/setup-java@v5 (Sửa triệt để cảnh báo deprecated)
+      # 2. Cài đặt Java JDK 17 (Đã bỏ cache: 'gradle' để không bị lỗi No file matched)
       - name: Set up Java JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'gradle'
 
-      # 3. Cài đặt Flutter SDK bản mới nhất
+      # 3. Cài đặt Flutter SDK
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      # 4. TỰ ĐỘNG TẠO THƯ MỤC ANDROID NẾU REPO CHỈ CÓ FILE MAIN.DART
+      # 4. Tự động sinh thư mục android/ nếu repo chỉ có mỗi lib/main.dart
       - name: Ensure Android Structure Exists
         run: |
           if [ ! -d "android" ]; then
@@ -40,14 +39,14 @@ jobs:
             flutter create . --platforms=android --org=com.example
           fi
 
-      # 5. Cấp quyền thực thi cho gradlew
+      # 5. Cấp quyền thực thi cho gradlew (tránh lỗi Permission Denied)
       - name: Grant execute permission for gradlew
         run: |
           if [ -f "android/gradlew" ]; then
             chmod +x android/gradlew
           fi
 
-      # 6. Tự động nâng minSdkVersion lên 23 (Bắt buộc cho flutter_secure_storage)
+      # 6. Tự động cấu hình minSdkVersion 23 (Bắt buộc cho flutter_secure_storage)
       - name: Configure Android minSdkVersion 23
         run: |
           if [ -f "android/app/build.gradle" ]; then
@@ -67,7 +66,7 @@ jobs:
       - name: Build Android Release APK
         run: flutter build apk --release
 
-      # 9. Xuất file APK ra Artifacts để tải về điện thoại ngay lập tức
+      # 9. Đẩy file APK lên Artifacts để tải về điện thoại
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
