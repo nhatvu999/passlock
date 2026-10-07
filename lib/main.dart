@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -215,12 +216,24 @@ class BackupService {
     return buffer.toString();
   }
 
+  static String exportToJSON(List<CredentialItem> items) {
+    final list = items.map((e) => e.toMap()).toList();
+    return const JsonEncoder.withIndent('  ').convert(list);
+  }
+
   static Future<void> exportAndShare({
     required BuildContext context,
     required List<CredentialItem> items,
-    required String format, // 'csv' hoặc 'txt'
+    required String format, // 'csv', 'txt' hoặc 'json'
   }) async {
-    final content = format == 'csv' ? exportToCSV(items) : exportToTXT(items);
+    String content;
+    if (format == 'csv') {
+      content = exportToCSV(items);
+    } else if (format == 'txt') {
+      content = exportToTXT(items);
+    } else {
+      content = exportToJSON(items);
+    }
     final dir = await getTemporaryDirectory();
     final fileName = 'passlock_backup_${DateTime.now().millisecondsSinceEpoch}.$format';
     final file = File('${dir.path}/$fileName');
@@ -667,7 +680,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => CredentialDialog(item: existing),
+      builder: (context) => CredentialDialog(item: existing, isDarkMode: _isDarkMode),
     );
 
     if (result != null) {
@@ -684,12 +697,30 @@ class _HomeScreenState extends State<HomeScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Xác nhận xóa'),
-        content: Text('Bạn có chắc muốn xóa "${item.service}" không?'),
+        backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Xác nhận xóa',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+          ),
+        ),
+        content: Text(
+          'Bạn có chắc muốn xóa "${item.service}" không?',
+          style: TextStyle(
+            color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Hủy'),
+            child: Text(
+              'Hủy',
+              style: TextStyle(
+                color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+              ),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
@@ -718,12 +749,20 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Row(
-            children: const [
-              Icon(Icons.key_rounded, color: Color(0xFF0284C7), size: 24),
-              SizedBox(width: 8),
-              Text('Đổi Mã PIN 6 Số', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            children: [
+              const Icon(Icons.key_rounded, color: Color(0xFF0284C7), size: 24),
+              const SizedBox(width: 8),
+              Text(
+                'Đổi Mã PIN 6 Số',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
+              ),
             ],
           ),
           content: SingleChildScrollView(
@@ -731,9 +770,12 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Mã PIN 6 số bảo vệ kho mật khẩu khi khởi động ứng dụng hoặc khi chuyển ra nền.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
                 ),
                 const SizedBox(height: 16),
 
@@ -744,17 +786,49 @@ class _HomeScreenState extends State<HomeScreen> {
                   maxLength: 6,
                   obscureText: obscureCurrent,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  style: TextStyle(
+                    color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                    fontFamily: 'monospace',
+                  ),
                   decoration: InputDecoration(
                     labelText: 'Mã PIN hiện tại *',
                     hintText: 'Mặc định ban đầu: 123456',
-                    labelStyle: const TextStyle(fontSize: 12),
+                    labelStyle: TextStyle(
+                      fontSize: 12,
+                      color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                    hintStyle: TextStyle(
+                      fontSize: 12,
+                      color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
+                    ),
                     counterText: '',
-                    prefixIcon: const Icon(Icons.lock_open_rounded, size: 20),
+                    filled: true,
+                    fillColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                    prefixIcon: Icon(
+                      Icons.lock_open_rounded,
+                      size: 20,
+                      color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
+                    ),
                     suffixIcon: IconButton(
-                      icon: Icon(obscureCurrent ? Icons.visibility_off : Icons.visibility, size: 18),
+                      icon: Icon(
+                        obscureCurrent ? Icons.visibility_off : Icons.visibility,
+                        size: 18,
+                        color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                      ),
                       onPressed: () => setDialogState(() => obscureCurrent = !obscureCurrent),
                     ),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300,
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200,
+                      ),
+                    ),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                 ),
@@ -767,17 +841,49 @@ class _HomeScreenState extends State<HomeScreen> {
                   maxLength: 6,
                   obscureText: obscureNew,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  style: TextStyle(
+                    color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                    fontFamily: 'monospace',
+                  ),
                   decoration: InputDecoration(
                     labelText: 'Mã PIN 6 số mới *',
                     hintText: 'Nhập 6 số mới',
-                    labelStyle: const TextStyle(fontSize: 12),
+                    labelStyle: TextStyle(
+                      fontSize: 12,
+                      color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                    hintStyle: TextStyle(
+                      fontSize: 12,
+                      color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
+                    ),
                     counterText: '',
-                    prefixIcon: const Icon(Icons.key_rounded, size: 20),
+                    filled: true,
+                    fillColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                    prefixIcon: Icon(
+                      Icons.key_rounded,
+                      size: 20,
+                      color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
+                    ),
                     suffixIcon: IconButton(
-                      icon: Icon(obscureNew ? Icons.visibility_off : Icons.visibility, size: 18),
+                      icon: Icon(
+                        obscureNew ? Icons.visibility_off : Icons.visibility,
+                        size: 18,
+                        color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                      ),
                       onPressed: () => setDialogState(() => obscureNew = !obscureNew),
                     ),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300,
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200,
+                      ),
+                    ),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                 ),
@@ -790,13 +896,41 @@ class _HomeScreenState extends State<HomeScreen> {
                   maxLength: 6,
                   obscureText: obscureNew,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  style: TextStyle(
+                    color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                    fontFamily: 'monospace',
+                  ),
                   decoration: InputDecoration(
                     labelText: 'Xác nhận mã PIN mới *',
                     hintText: 'Nhập lại đúng 6 số mới',
-                    labelStyle: const TextStyle(fontSize: 12),
+                    labelStyle: TextStyle(
+                      fontSize: 12,
+                      color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                    hintStyle: TextStyle(
+                      fontSize: 12,
+                      color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
+                    ),
                     counterText: '',
-                    prefixIcon: const Icon(Icons.check_circle_outline, size: 20),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    filled: true,
+                    fillColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                    prefixIcon: Icon(
+                      Icons.check_circle_outline,
+                      size: 20,
+                      color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300,
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200,
+                      ),
+                    ),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                 ),
@@ -806,18 +940,24 @@ class _HomeScreenState extends State<HomeScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFEE2E2),
+                      color: _isDarkMode ? const Color(0xFF450A0A) : const Color(0xFFFEE2E2),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFF87171)),
+                      border: Border.all(
+                        color: _isDarkMode ? const Color(0xFF991B1B) : const Color(0xFFF87171),
+                      ),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.error_outline, color: Color(0xFFDC2626), size: 16),
+                        const Icon(Icons.error_outline, color: Color(0xFFEF4444), size: 16),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             errorMessage!,
-                            style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 12, fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                              color: _isDarkMode ? const Color(0xFFFCA5A5) : const Color(0xFFB91C1C),
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ],
@@ -830,11 +970,16 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Hủy'),
+              child: Text(
+                'Hủy',
+                style: TextStyle(
+                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0F172A),
+                backgroundColor: _isDarkMode ? const Color(0xFF0284C7) : const Color(0xFF0F172A),
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
@@ -870,15 +1015,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 HapticFeedback.mediumImpact();
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Row(
+                    SnackBar(
+                      content: const Row(
                         children: [
                           Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
                           SizedBox(width: 8),
                           Text('Đã đổi mã PIN 6 số thành công!'),
                         ],
                       ),
-                      backgroundColor: Color(0xFF0F172A),
+                      backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -892,10 +1037,71 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _pickAndImportFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv', 'txt', 'json'],
+      );
+      if (result != null && result.files.isNotEmpty) {
+        final picked = result.files.first;
+        String? content;
+        if (picked.bytes != null) {
+          content = utf8.decode(picked.bytes!);
+        } else if (picked.path != null) {
+          final file = File(picked.path!);
+          content = await file.readAsString();
+        }
+        if (content != null && content.trim().isNotEmpty) {
+          final imported = BackupService.parseUniversal(content);
+          if (imported.isNotEmpty) {
+            for (final item in imported) {
+              await widget.storageService.addCredential(item);
+            }
+            _loadData();
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
+                      const SizedBox(width: 8),
+                      Text('Đã nạp thành công ${imported.length} tài khoản từ file!'),
+                    ],
+                  ),
+                  backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          } else {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Không tìm thấy tài khoản hợp lệ trong file đã chọn!'),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Lỗi khi mở file: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _openBackupDialog() async {
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -909,94 +1115,177 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Container(
                 width: 40,
                 height: 4,
-                decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+                decoration: BoxDecoration(
+                  color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
             const SizedBox(height: 16),
-            const Text(
-              'Cài Đặt Bảo Mật & Sao Lưu Dữ Liệu',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+            Text(
+              'Sao Lưu & Xuất/Nhập Dữ Liệu',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+              ),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Đổi mã PIN mở khóa hoặc xuất file cất giữ để khôi phục khi đổi máy:',
-              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            Text(
+              'Xuất file cất giữ an toàn hoặc nhập file đã sao lưu để khôi phục tài khoản:',
+              style: TextStyle(
+                fontSize: 12,
+                color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+              ),
             ),
             const SizedBox(height: 16),
+
+            // 1. Nhập từ file trên máy
             ListTile(
               leading: CircleAvatar(
-                backgroundColor: _isDarkMode ? const Color(0xFF334155) : const Color(0xFFFEF3C7),
+                backgroundColor: _isDarkMode ? const Color(0xFF0284C7).withOpacity(0.2) : const Color(0xFFE0F2FE),
                 child: Icon(
-                  _isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
-                  color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFFD97706),
+                  Icons.file_open_rounded,
+                  color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
                 ),
               ),
               title: Text(
-                _isDarkMode ? 'Giao diện Tối (Đang bật)' : 'Giao diện Sáng (Đang bật)',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                'Nhập file từ thiết bị (.csv, .txt, .json)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
               ),
               subtitle: Text(
-                _isDarkMode ? 'Nền đen mờ OLED tiết kiệm pin, bấm để đổi nền sáng' : 'Nền sáng tiêu chuẩn, bấm để chuyển nền tối',
-                style: const TextStyle(fontSize: 12),
-              ),
-              trailing: Switch(
-                value: _isDarkMode,
-                onChanged: (val) {
-                  Navigator.pop(ctx);
-                  _toggleTheme();
-                },
+                'Chọn file sao lưu trong máy hoặc Google Drive để nạp lại toàn bộ tài khoản',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
               ),
               onTap: () {
                 Navigator.pop(ctx);
-                _toggleTheme();
+                _pickAndImportFile();
               },
             ),
-            const Divider(),
+            Divider(color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0)),
+
+            // 2. Xuất CSV / Excel
             ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFE0F2FE),
-                child: Icon(Icons.key_rounded, color: Color(0xFF0284C7)),
+              leading: CircleAvatar(
+                backgroundColor: _isDarkMode ? const Color(0xFF16A34A).withOpacity(0.2) : const Color(0xFFDCFCE7),
+                child: Icon(
+                  Icons.table_chart_outlined,
+                  color: _isDarkMode ? const Color(0xFF4ADE80) : const Color(0xFF16A34A),
+                ),
               ),
-              title: const Text('Đổi mã khóa PIN 6 số', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Thay đổi mật mã mở khóa ứng dụng khi khởi động', style: TextStyle(fontSize: 12)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openChangePasscodeDialog();
-              },
-            ),
-            const Divider(),
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFDCFCE7),
-                child: Icon(Icons.table_chart_outlined, color: Color(0xFF16A34A)),
+              title: Text(
+                'Xuất file Excel / CSV (.csv)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
               ),
-              title: const Text('Xuất file Excel / CSV (.csv)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Mở xem và chỉnh sửa được bằng Excel, Google Sheets', style: TextStyle(fontSize: 12)),
+              subtitle: Text(
+                'Mở xem và chỉnh sửa được bằng Excel, Google Sheets',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 BackupService.exportAndShare(context: context, items: _credentials, format: 'csv');
               },
             ),
+
+            // 3. Xuất TXT
             ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFDBEAFE),
-                child: Icon(Icons.description_outlined, color: Color(0xFF2563EB)),
+              leading: CircleAvatar(
+                backgroundColor: _isDarkMode ? const Color(0xFF2563EB).withOpacity(0.2) : const Color(0xFFDBEAFE),
+                child: Icon(
+                  Icons.description_outlined,
+                  color: _isDarkMode ? const Color(0xFF60A5FA) : const Color(0xFF2563EB),
+                ),
               ),
-              title: const Text('Xuất file Văn bản (.txt)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Xem trên Notepad, Word, lưu trữ cá nhân hoặc gửi tin nhắn', style: TextStyle(fontSize: 12)),
+              title: Text(
+                'Xuất file Văn bản (.txt)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
+              ),
+              subtitle: Text(
+                'Xem trên Notepad, Word, lưu trữ cá nhân hoặc gửi tin nhắn',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 BackupService.exportAndShare(context: context, items: _credentials, format: 'txt');
               },
             ),
-            const Divider(),
+
+            // 4. Xuất JSON
             ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFF3E8FF),
-                child: Icon(Icons.file_download_outlined, color: Color(0xFF9333EA)),
+              leading: CircleAvatar(
+                backgroundColor: _isDarkMode ? const Color(0xFF0891B2).withOpacity(0.2) : const Color(0xFFCFFAFE),
+                child: Icon(
+                  Icons.code_rounded,
+                  color: _isDarkMode ? const Color(0xFF22D3EE) : const Color(0xFF0891B2),
+                ),
               ),
-              title: const Text('Nhập khôi phục dữ liệu (Import)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              subtitle: const Text('Dán nội dung từ file .csv, .txt hoặc .json để phục hồi toàn bộ tài khoản', style: TextStyle(fontSize: 12)),
+              title: Text(
+                'Xuất file JSON (.json)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
+              ),
+              subtitle: Text(
+                'Bản sao lưu chuẩn kỹ thuật đầy đủ cấu trúc và thời gian',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                BackupService.exportAndShare(context: context, items: _credentials, format: 'json');
+              },
+            ),
+            Divider(color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0)),
+
+            // 5. Dán dữ liệu từ văn bản / bộ nhớ tạm
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: _isDarkMode ? const Color(0xFF9333EA).withOpacity(0.2) : const Color(0xFFF3E8FF),
+                child: Icon(
+                  Icons.content_paste_rounded,
+                  color: _isDarkMode ? const Color(0xFFC084FC) : const Color(0xFF9333EA),
+                ),
+              ),
+              title: Text(
+                'Dán nội dung khôi phục (Clipboard / Dán tay)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
+              ),
+              subtitle: Text(
+                'Dán nội dung từ file .csv, .txt hoặc .json đã copy trước đó',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 _showImportDialog();
@@ -1014,46 +1303,96 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModalState) => AlertDialog(
-          title: const Text('Khôi phục dữ liệu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text(
+            'Khôi phục dữ liệu',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+              color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+            ),
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Dán nội dung từ file TXT, CSV hoặc JSON đã sao lưu để phục hồi:',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                Text(
+                  'Chọn file trực tiếp từ máy hoặc dán nội dung file sao lưu để phục hồi:',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
                 ),
                 const SizedBox(height: 12),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFF1F5F9),
-                    foregroundColor: const Color(0xFF0F172A),
-                    elevation: 0,
-                  ),
-                  icon: const Icon(Icons.paste_rounded, size: 16),
-                  label: const Text('Dán từ bộ nhớ tạm (Clipboard)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  onPressed: () async {
-                    final data = await Clipboard.getData(Clipboard.kTextPlain);
-                    if (data != null && data.text != null) {
-                      setModalState(() {
-                        textController.text = data.text!;
-                      });
-                    }
-                  },
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                          foregroundColor: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0F172A),
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                        ),
+                        icon: const Icon(Icons.file_upload_outlined, size: 16),
+                        label: const Text('Chọn file máy', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _pickAndImportFile();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                          foregroundColor: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                        ),
+                        icon: const Icon(Icons.paste_rounded, size: 16),
+                        label: const Text('Dán Clipboard', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        onPressed: () async {
+                          final data = await Clipboard.getData(Clipboard.kTextPlain);
+                          if (data != null && data.text != null) {
+                            setModalState(() {
+                              textController.text = data.text!;
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: textController,
-                  maxLines: 6,
+                  maxLines: 5,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                  ),
                   decoration: InputDecoration(
                     hintText: 'Dán nội dung file sao lưu vào đây...',
-                    hintStyle: const TextStyle(fontSize: 12),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    hintStyle: TextStyle(
+                      fontSize: 12,
+                      color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200),
+                    ),
                     filled: true,
-                    fillColor: const Color(0xFFF8FAFC),
+                    fillColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
                   ),
-                  style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
                 ),
               ],
             ),
@@ -1061,12 +1400,16 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Hủy'),
+              child: Text(
+                'Hủy',
+                style: TextStyle(color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+              ),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0F172A),
+                backgroundColor: _isDarkMode ? const Color(0xFF0284C7) : const Color(0xFF0F172A),
                 foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
               onPressed: () async {
                 final content = textController.text.trim();
@@ -1080,13 +1423,26 @@ class _HomeScreenState extends State<HomeScreen> {
                   _loadData();
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Đã phục hồi thành công ${imported.length} tài khoản!')),
+                      SnackBar(
+                        content: Row(
+                          children: [
+                            const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
+                            const SizedBox(width: 8),
+                            Text('Đã phục hồi thành công ${imported.length} tài khoản!'),
+                          ],
+                        ),
+                        backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
+                        behavior: SnackBarBehavior.floating,
+                      ),
                     );
                   }
                 } else {
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Không tìm thấy dữ liệu hợp lệ để phục hồi!')),
+                      const SnackBar(
+                        content: Text('Không tìm thấy dữ liệu hợp lệ để phục hồi!'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
                     );
                   }
                 }
@@ -1474,8 +1830,9 @@ class _HomeScreenState extends State<HomeScreen> {
 // ============================================================================
 class CredentialDialog extends StatefulWidget {
   final CredentialItem? item;
+  final bool isDarkMode;
 
-  const CredentialDialog({super.key, this.item});
+  const CredentialDialog({super.key, this.item, this.isDarkMode = false});
 
   @override
   State<CredentialDialog> createState() => _CredentialDialogState();
@@ -1557,9 +1914,9 @@ class _CredentialDialogState extends State<CredentialDialog> {
         right: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 20,
       ),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: widget.isDarkMode ? const Color(0xFF0F172A) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: Form(
         key: _formKey,
@@ -1570,26 +1927,52 @@ class _CredentialDialogState extends State<CredentialDialog> {
             children: [
               Text(
                 isEdit ? 'Chỉnh sửa tài khoản' : 'Thêm tài khoản mới',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: widget.isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
               ),
               const SizedBox(height: 16),
               TextFormField(
                 controller: _serviceController,
-                decoration: const InputDecoration(
+                style: TextStyle(color: widget.isDarkMode ? Colors.white : const Color(0xFF0F172A)),
+                decoration: InputDecoration(
                   labelText: 'Dịch vụ / Tên website *',
+                  labelStyle: TextStyle(color: widget.isDarkMode ? const Color(0xFF94A3B8) : null),
                   hintText: 'Ví dụ: Google, Facebook, Techcombank',
-                  border: OutlineInputBorder(),
+                  hintStyle: TextStyle(color: widget.isDarkMode ? const Color(0xFF64748B) : null),
+                  filled: widget.isDarkMode,
+                  fillColor: widget.isDarkMode ? const Color(0xFF1E293B) : null,
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: widget.isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300),
+                  ),
                 ),
                 validator: (val) => val == null || val.trim().isEmpty ? 'Nhập tên dịch vụ' : null,
               ),
               const SizedBox(height: 14),
               DropdownButtonFormField<String>(
                 value: _selectedCategory,
-                decoration: const InputDecoration(
+                dropdownColor: widget.isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                style: TextStyle(color: widget.isDarkMode ? Colors.white : const Color(0xFF0F172A)),
+                decoration: InputDecoration(
                   labelText: 'Danh mục',
-                  border: OutlineInputBorder(),
+                  labelStyle: TextStyle(color: widget.isDarkMode ? const Color(0xFF94A3B8) : null),
+                  filled: widget.isDarkMode,
+                  fillColor: widget.isDarkMode ? const Color(0xFF1E293B) : null,
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: widget.isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300),
+                  ),
                 ),
-                items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                items: _categories
+                    .map((c) => DropdownMenuItem(
+                          value: c,
+                          child: Text(
+                            c,
+                            style: TextStyle(color: widget.isDarkMode ? Colors.white : const Color(0xFF0F172A)),
+                          ),
+                        ))
+                    .toList(),
                 onChanged: (val) {
                   if (val != null) setState(() => _selectedCategory = val);
                 },
@@ -1597,9 +1980,15 @@ class _CredentialDialogState extends State<CredentialDialog> {
               const SizedBox(height: 14),
               TextFormField(
                 controller: _usernameController,
-                decoration: const InputDecoration(
+                style: TextStyle(color: widget.isDarkMode ? Colors.white : const Color(0xFF0F172A)),
+                decoration: InputDecoration(
                   labelText: 'Tài khoản / Email / SĐT *',
-                  border: OutlineInputBorder(),
+                  labelStyle: TextStyle(color: widget.isDarkMode ? const Color(0xFF94A3B8) : null),
+                  filled: widget.isDarkMode,
+                  fillColor: widget.isDarkMode ? const Color(0xFF1E293B) : null,
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: widget.isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300),
+                  ),
                 ),
                 validator: (val) => val == null || val.trim().isEmpty ? 'Nhập tài khoản' : null,
               ),
@@ -1607,19 +1996,31 @@ class _CredentialDialogState extends State<CredentialDialog> {
               TextFormField(
                 controller: _passwordController,
                 obscureText: _obscurePassword,
+                style: TextStyle(
+                  color: widget.isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                  fontFamily: 'monospace',
+                ),
                 decoration: InputDecoration(
                   labelText: 'Mật khẩu *',
-                  border: const OutlineInputBorder(),
+                  labelStyle: TextStyle(color: widget.isDarkMode ? const Color(0xFF94A3B8) : null),
+                  filled: widget.isDarkMode,
+                  fillColor: widget.isDarkMode ? const Color(0xFF1E293B) : null,
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: widget.isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300),
+                  ),
                   suffixIcon: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
                         tooltip: 'Tạo mật khẩu mạnh',
-                        icon: const Icon(Icons.auto_fix_high, color: Colors.blue),
+                        icon: const Icon(Icons.auto_fix_high, color: Color(0xFF38BDF8)),
                         onPressed: _generateStrongPassword,
                       ),
                       IconButton(
-                        icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+                        icon: Icon(
+                          _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                          color: widget.isDarkMode ? const Color(0xFF94A3B8) : null,
+                        ),
                         onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                       ),
                     ],
@@ -1630,9 +2031,15 @@ class _CredentialDialogState extends State<CredentialDialog> {
               const SizedBox(height: 14),
               TextFormField(
                 controller: _notesController,
-                decoration: const InputDecoration(
+                style: TextStyle(color: widget.isDarkMode ? Colors.white : const Color(0xFF0F172A)),
+                decoration: InputDecoration(
                   labelText: 'Ghi chú (Tùy chọn)',
-                  border: OutlineInputBorder(),
+                  labelStyle: TextStyle(color: widget.isDarkMode ? const Color(0xFF94A3B8) : null),
+                  filled: widget.isDarkMode,
+                  fillColor: widget.isDarkMode ? const Color(0xFF1E293B) : null,
+                  border: OutlineInputBorder(
+                    borderSide: BorderSide(color: widget.isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300),
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
@@ -1641,8 +2048,9 @@ class _CredentialDialogState extends State<CredentialDialog> {
                 height: 48,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF0F172A),
+                    backgroundColor: widget.isDarkMode ? const Color(0xFF0284C7) : const Color(0xFF0F172A),
                     foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   onPressed: _submit,
                   child: Text(isEdit ? 'Lưu thay đổi' : 'Thêm mới'),
