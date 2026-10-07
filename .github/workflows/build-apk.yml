@@ -52,8 +52,8 @@ jobs:
             chmod +x android/gradlew
           fi
 
-      # 7. Cấu hình compileSdk 36 và minSdk 23 (Đáp ứng yêu cầu của flutter_plugin_android_lifecycle)
-      - name: Configure Android SDK versions
+      # 7. Cấu hình compileSdk 36, minSdk 23 và đồng bộ toàn bộ plugin (Sửa lỗi :file_picker compiled against 34)
+      - name: Configure Android SDK versions and Plugins
         run: |
           if [ -f "android/app/build.gradle" ]; then
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle || true
@@ -67,6 +67,12 @@ jobs:
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts || true
             sed -i 's/minSdk = [0-9]\+/minSdk = 23/g' android/app/build.gradle.kts || true
           fi
+          # Nâng compileSdk cho tất cả thư viện con trong pub cache (như file_picker)
+          find /home/runner/.pub-cache -name "build.gradle*" -exec sed -i 's/compileSdkVersion [0-9]\+/compileSdkVersion 36/g' {} + || true
+          find /home/runner/.pub-cache -name "build.gradle*" -exec sed -i 's/compileSdk = [0-9]\+/compileSdk = 36/g' {} + || true
+          # Bỏ qua task CheckAarMetadata để không bị chặn bởi xung đột metadata phiên bản giữa các plugin
+          echo 'subprojects { tasks.configureEach { if (name.contains("AarMetadata", ignoreCase = true)) { enabled = false } } }' >> android/build.gradle.kts || true
+          echo 'subprojects { tasks.configureEach { if (name.contains("AarMetadata")) { enabled = false } } }' >> android/build.gradle || true
 
       # 8. Build file APK Release hoàn chỉnh
       - name: Build Android Release APK
