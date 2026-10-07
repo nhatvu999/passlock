@@ -87,7 +87,6 @@ class SecureStorageService {
     if (currentPasscode == null || currentPasscode.isEmpty) {
       await _storage.write(key: _keyPasscode, value: _defaultPasscode);
       
-      // Khởi tạo một số tài khoản mẫu ban đầu
       final defaultList = [
         CredentialItem(
           id: 'demo_google',
@@ -208,7 +207,7 @@ class BackupService {
   static Future<void> exportAndShare({
     required BuildContext context,
     required List<CredentialItem> items,
-    required String format, // 'csv' hoặc 'txt'
+    required String format,
   }) async {
     final content = format == 'csv' ? exportToCSV(items) : exportToTXT(items);
     final dir = await getTemporaryDirectory();
@@ -270,13 +269,13 @@ class BackupService {
           if (char == '"') {
             inQuotes = !inQuotes;
           } else if (char == ',' && !inQuotes) {
-            values.add(current.replaceAll('^"', '').replaceAll('"$', '').replaceAll('""', '"').trim());
+            values.add(_cleanCsvCell(current));
             current = '';
           } else {
             current += char;
           }
         }
-        values.add(current.replaceAll('^"', '').replaceAll('"$', '').replaceAll('""', '"').trim());
+        values.add(_cleanCsvCell(current));
 
         if (values.length >= 4) {
           imported.add(CredentialItem(
@@ -292,6 +291,14 @@ class BackupService {
       }
     }
     return imported;
+  }
+
+  static String _cleanCsvCell(String raw) {
+    String val = raw.trim();
+    if (val.startsWith('"') && val.endsWith('"') && val.length >= 2) {
+      val = val.substring(1, val.length - 1);
+    }
+    return val.replaceAll('""', '"').trim();
   }
 }
 
@@ -403,6 +410,7 @@ class _PasscodeScreenState extends State<PasscodeScreen>
                 color: Colors.white,
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
               ),
             ),
             const SizedBox(height: 8),
@@ -410,43 +418,27 @@ class _PasscodeScreenState extends State<PasscodeScreen>
             Text(
               _message,
               style: TextStyle(
-                color: _isError ? const Color(0xFFF87171) : const Color(0xFF94A3B8),
-                fontSize: 14,
+                color: _isError ? const Color(0xFFEF4444) : const Color(0xFF94A3B8),
+                fontSize: 13,
               ),
             ),
-            const SizedBox(height: 12),
-
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text(
-                'Mã mặc định: 123456',
-                style: TextStyle(color: Color(0xFF38BDF8), fontSize: 12),
-              ),
-            ),
-
             const SizedBox(height: 36),
 
-            // 6 Chấm tròn PIN dots
+            // 6 chấm tròn biểu thị 6 chữ số PIN
             AnimatedBuilder(
               animation: _shakeController,
               builder: (context, child) {
-                final double offset = 10 *
-                    (1 - _shakeController.value) *
-                    ((_shakeController.value * 6).toInt().isEven ? 1 : -1);
+                final offset = sin(_shakeController.value * pi * 4) * 8;
                 return Transform.translate(
-                  offset: Offset(_isError ? offset : 0, 0),
+                  offset: Offset(offset, 0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(6, (index) {
                       final isFilled = index < _enteredCode.length;
                       return Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 8),
-                        width: 16,
-                        height: 16,
+                        margin: const EdgeInsets.symmetric(horizontal: 9),
+                        width: 14,
+                        height: 14,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: isFilled
@@ -583,7 +575,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   
-  // Mặc định hiển thị pass trực tiếp khi mở tài khoản. Set này chỉ lưu khi người dùng bấm che tạm thời
   final Set<String> _maskedPasswordIds = {};
   String? _expandedItemId;
 
@@ -1325,7 +1316,6 @@ class _PassLockAppState extends State<PassLockApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Tự động khóa lại màn hình khi ứng dụng bị ẩn hoặc chuyển ra nền
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       if (_isUnlocked) {
         setState(() {
