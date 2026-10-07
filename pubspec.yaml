@@ -15,7 +15,6 @@ dependencies:
   # Xuất file và chia sẻ qua Drive, Zalo, Gmail hoặc lưu vào máy
   share_plus: ^10.1.2
   # Chọn file sao lưu (.csv, .txt, .json) để phục hồi
-  file_picker: ^8.1.6
   # Thư mục lưu file tạm thời
   path_provider: ^2.1.5
   # Icon giao diện hiện đại
