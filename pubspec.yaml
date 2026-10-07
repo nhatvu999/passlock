@@ -1,0 +1,34 @@
+name: passlock
+description: "Ứng dụng bảo mật quản lý mật khẩu cá nhân - PassLock"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Lưu trữ dữ liệu mã hóa phần cứng an toàn trên Android (Keystore/EncryptedSharedPreferences)
+  flutter_secure_storage: ^9.2.2
+  # Quản lý trạng thái đơn giản, nhẹ nhàng
+  provider: ^6.1.2
+  # Xuất file và chia sẻ qua Drive, Zalo, Gmail hoặc lưu vào máy
+  share_plus: ^10.1.2
+  # Chọn file sao lưu (.csv, .txt, .json) để phục hồi
+  file_picker: ^8.1.6
+  # Thư mục lưu file tạm thời
+  path_provider: ^2.1.5
+  # Icon giao diện hiện đại
+  cupertino_icons: ^1.0.8
+  # Sinh chuỗi ngẫu nhiên (UUID cho id tài khoản)
+  uuid: ^4.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
