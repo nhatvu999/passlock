@@ -184,16 +184,14 @@ class BackupService {
     final buffer = StringBuffer();
     // Thêm ký tự UTF-8 BOM (﻿) ở đầu file để Microsoft Excel hiển thị chuẩn 100% tiếng Việt
     buffer.write('﻿');
-    buffer.write('"Dịch vụ","Danh mục","Tài khoản/Email","Mật khẩu","Ghi chú"
-');
+    buffer.writeln('"Dịch vụ","Danh mục","Tài khoản/Email","Mật khẩu","Ghi chú"');
     for (final it in items) {
       final s = it.service.replaceAll('"', '""');
       final c = it.category.replaceAll('"', '""');
       final u = it.username.replaceAll('"', '""');
       final p = it.password.replaceAll('"', '""');
       final n = (it.notes ?? '').replaceAll('"', '""');
-      buffer.write('"${s}","${c}","${u}","${p}","${n}"
-');
+      buffer.writeln('"${s}","${c}","${u}","${p}","${n}"');
     }
     return buffer.toString();
   }
@@ -202,40 +200,27 @@ class BackupService {
     final buffer = StringBuffer();
     // Thêm ký tự UTF-8 BOM (﻿) để Notepad hiển thị chuẩn font tiếng Việt
     buffer.write('﻿');
-    buffer.write('==================================================
-');
-    buffer.write('       BẢN SAO LƯU MẬT KHẨU PASSLOCK VAULT        
-');
-    buffer.write('       Ngày xuất: ${DateTime.now().toLocal()}     
-');
-    buffer.write('       Tổng số tài khoản: ${items.length}        
-');
-    buffer.write('       Định dạng: Chuẩn PassLock Vault UTF-8      
-');
-    buffer.write('==================================================
-
-');
+    buffer.writeln('==================================================');
+    buffer.writeln('       BẢN SAO LƯU MẬT KHẨU PASSLOCK VAULT        ');
+    buffer.writeln('       Ngày xuất: ${DateTime.now().toLocal()}     ');
+    buffer.writeln('       Tổng số tài khoản: ${items.length}        ');
+    buffer.writeln('       Định dạng: Chuẩn PassLock Vault UTF-8      ');
+    buffer.writeln('==================================================');
+    buffer.writeln();
 
     for (int i = 0; i < items.length; i++) {
       final it = items[i];
       final cat = it.category.isEmpty ? 'Khác' : it.category;
-      buffer.write('[MỤC ${i + 1}] Dịch vụ: ${it.service} (${cat})
-');
-      buffer.write('Dịch vụ           : ${it.service}
-');
-      buffer.write('Danh mục          : ${cat}
-');
-      buffer.write('Tài khoản / Email : ${it.username}
-');
-      buffer.write('Mật khẩu          : ${it.password}
-');
+      buffer.writeln('[MỤC ${i + 1}] Dịch vụ: ${it.service} (${cat})');
+      buffer.writeln('Dịch vụ           : ${it.service}');
+      buffer.writeln('Danh mục          : ${cat}');
+      buffer.writeln('Tài khoản / Email : ${it.username}');
+      buffer.writeln('Mật khẩu          : ${it.password}');
       if (it.notes != null && it.notes!.isNotEmpty) {
-        buffer.write('Ghi chú           : ${it.notes}
-');
+        buffer.writeln('Ghi chú           : ${it.notes}');
       }
-      buffer.write('--------------------------------------------------
-
-');
+      buffer.writeln('--------------------------------------------------');
+      buffer.writeln();
     }
     return buffer.toString();
   }
@@ -338,10 +323,8 @@ class BackupService {
       } catch (_) {}
     }
 
-    // 2. Parse CSV (Tự phát hiện phân cách dấu phẩy, chấm phẩy hoặc tab và tự khớp tiêu đề cột)
-    final lines = trimmed.split(RegExp(r'
-?
-')).where((l) => l.trim().isNotEmpty).toList();
+    // 2. Parse CSV (Dùng LineSplitter chuẩn thư viện Dart, không dùng regex phân tách)
+    final lines = const LineSplitter().convert(trimmed).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
     if (lines.isNotEmpty) {
       final firstLine = lines[0];
       String delimiter = ',';
@@ -429,11 +412,8 @@ class BackupService {
       }
     }
 
-    // 3. Parse TXT (StateMachine theo từng khối và dòng, không bị đứt đoạn bởi dấu phân cách)
-    final allTextLines = trimmed.split(RegExp(r'
-?
-')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
-    CredentialItem? curItem;
+    // 3. Parse TXT (LineSplitter, StateMachine, không dùng regex phân tách)
+    final allTextLines = const LineSplitter().convert(trimmed).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
     String curService = '';
     String curCat = 'Khác';
     String curUser = '';
@@ -460,28 +440,23 @@ class BackupService {
     }
 
     for (final line in allTextLines) {
-      if (RegExp(r'^[-=]{4,}$').hasMatch(line)) {
+      if (line.length >= 4 && line.split('').every((c) => c == '-' || c == '=')) {
         commitCurrent();
         continue;
       }
 
-      final headerMatch = RegExp(r'^[-*#s]*[(?:MỤCs*)?(d+)[^]]*]s*(.*)$', caseSensitive: false).firstMatch(line);
-      if (headerMatch != null) {
+      if (line.startsWith('[') && line.contains(']')) {
         commitCurrent();
-        final rest = (headerMatch.group(2) ?? '').replaceAll(RegExp(r'^[-*#s]+|[-*#s]+$'), '').trim();
+        final after = line.substring(line.indexOf(']') + 1).trim();
+        var rest = after;
         if (rest.toLowerCase().startsWith('dịch vụ:')) {
-          final after = rest.substring(8).trim();
-          if (after.contains('(') && after.contains(')')) {
-            curService = after.split('(')[0].trim();
-            curCat = after.split('(')[1].replaceAll(')', '').trim();
-          } else {
-            curService = after;
-          }
-        } else if (rest.isNotEmpty) {
+          rest = rest.substring(8).trim();
+        }
+        if (rest.contains('(') && rest.contains(')')) {
           curService = rest.split('(')[0].trim();
-          if (rest.contains('(') && rest.contains(')')) {
-            curCat = rest.split('(')[1].replaceAll(')', '').trim();
-          }
+          curCat = rest.split('(')[1].replaceAll(')', '').trim();
+        } else {
+          curService = rest.trim();
         }
         continue;
       }
