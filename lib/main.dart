@@ -192,7 +192,7 @@ class BackupService {
       final u = it.username.replaceAll('"', '""');
       final p = it.password.replaceAll('"', '""');
       final n = (it.notes ?? '').replaceAll('"', '""');
-      buffer.write('"$s","$c","$u","$p","$n"
+      buffer.write('"${s}","${c}","${u}","${p}","${n}"
 ');
     }
     return buffer.toString();
@@ -210,17 +210,20 @@ class BackupService {
 ');
     buffer.write('       Tổng số tài khoản: ${items.length}        
 ');
+    buffer.write('       Định dạng: Chuẩn PassLock Vault UTF-8      
+');
     buffer.write('==================================================
 
 ');
 
     for (int i = 0; i < items.length; i++) {
       final it = items[i];
-      buffer.write('--- [${i + 1}] Dịch vụ: ${it.service} (${it.category}) ---
+      final cat = it.category.isEmpty ? 'Khác' : it.category;
+      buffer.write('[MỤC ${i + 1}] Dịch vụ: ${it.service} (${cat})
 ');
       buffer.write('Dịch vụ           : ${it.service}
 ');
-      buffer.write('Danh mục          : ${it.category}
+      buffer.write('Danh mục          : ${cat}
 ');
       buffer.write('Tài khoản / Email : ${it.username}
 ');
@@ -231,6 +234,7 @@ class BackupService {
 ');
       }
       buffer.write('--------------------------------------------------
+
 ');
     }
     return buffer.toString();
@@ -263,7 +267,7 @@ class BackupService {
     }
 
     final timeStamp = DateTime.now().millisecondsSinceEpoch;
-    final fileName = 'passlock_backup_$timeStamp.$format';
+    final fileName = 'passlock_backup_${timeStamp}.${format}';
 
     // Chèn chính xác mảng 3 byte UTF-8 BOM: 0xEF, 0xBB, 0xBF vào nhị phân file
     // Điều này đảm bảo 100% Microsoft Excel, Notepad, Google Sheets không bị lỗi font Tiếng Việt
@@ -279,13 +283,13 @@ class BackupService {
       if (!await backupDir.exists()) {
         await backupDir.create(recursive: true);
       }
-      final localBackupFile = File('${backupDir.path}/$fileName');
+      final localBackupFile = File('${backupDir.path}/${fileName}');
       await localBackupFile.writeAsBytes(fileBytes);
     } catch (_) {}
 
     // 2. Lưu vào thư mục tạm và kích hoạt chia sẻ hệ thống với mimeType utf-8 chuẩn
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$fileName');
+    final file = File('${dir.path}/${fileName}');
     await file.writeAsBytes(fileBytes);
 
     final mimeType = format == 'csv'
@@ -410,7 +414,7 @@ class BackupService {
 
             if (s.isNotEmpty && (u.isNotEmpty || p.isNotEmpty)) {
               imported.add(CredentialItem(
-                id: 'csv_${DateTime.now().millisecondsSinceEpoch}_$i',
+                id: 'csv_${DateTime.now().millisecondsSinceEpoch}_${i}',
                 service: s,
                 category: c,
                 username: u,
@@ -425,60 +429,88 @@ class BackupService {
       }
     }
 
-    // 3. Parse TXT (Khối bản sao lưu văn bản PassLock Vault chuẩn & sổ ghi chép)
-    final blocks = trimmed.split(RegExp(r'-{10,}|={10,}|-{3,}'));
-    for (int b = 0; b < blocks.length; b++) {
-      final block = blocks[b];
-      final bLines = block.split(RegExp(r'
+    // 3. Parse TXT (StateMachine theo từng khối và dòng, không bị đứt đoạn bởi dấu phân cách)
+    final allTextLines = trimmed.split(RegExp(r'
 ?
 ')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
-      String service = '';
-      String category = 'Khác';
-      String username = '';
-      String password = '';
-      String notes = '';
+    CredentialItem? curItem;
+    String curService = '';
+    String curCat = 'Khác';
+    String curUser = '';
+    String curPass = '';
+    String curNote = '';
 
-      for (final line in bLines) {
-        if (line.startsWith('[') && line.contains(']')) {
-          final afterBracket = line.substring(line.indexOf(']') + 1).trim();
-          final cleanAfter = afterBracket.toLowerCase().startsWith('dịch vụ:') ? afterBracket.substring(8).trim() : afterBracket;
-          if (cleanAfter.contains('(') && cleanAfter.contains(')')) {
-            service = cleanAfter.split('(')[0].trim();
-            final catPart = cleanAfter.split('(')[1];
-            category = catPart.replaceAll(')', '').trim();
-          } else {
-            service = cleanAfter.trim();
-          }
-        } else if (line.toLowerCase().startsWith('dịch vụ') || line.toLowerCase().startsWith('service:')) {
-          final parts = line.split(':');
-          if (parts.length > 1) service = parts.sublist(1).join(':').trim();
-        } else if (line.toLowerCase().startsWith('danh mục') || line.toLowerCase().startsWith('category:')) {
-          final parts = line.split(':');
-          if (parts.length > 1) category = parts.sublist(1).join(':').trim();
-        } else if (line.toLowerCase().contains('tài khoản') || line.toLowerCase().contains('email') || line.toLowerCase().startsWith('user:')) {
-          final parts = line.split(':');
-          if (parts.length > 1) username = parts.sublist(1).join(':').trim();
-        } else if (line.toLowerCase().contains('mật khẩu') || line.toLowerCase().contains('pass') || line.toLowerCase().startsWith('password:')) {
-          final parts = line.split(':');
-          if (parts.length > 1) password = parts.sublist(1).join(':').trim();
-        } else if (line.toLowerCase().contains('ghi chú') || line.toLowerCase().contains('note:')) {
-          final parts = line.split(':');
-          if (parts.length > 1) notes = parts.sublist(1).join(':').trim();
-        }
-      }
-
-      if (service.isNotEmpty && (username.isNotEmpty || password.isNotEmpty)) {
+    void commitCurrent() {
+      if (curService.isNotEmpty && (curUser.isNotEmpty || curPass.isNotEmpty)) {
         imported.add(CredentialItem(
-          id: 'txt_${DateTime.now().millisecondsSinceEpoch}_$b',
-          service: service,
-          category: category.isNotEmpty ? category : 'Khác',
-          username: username,
-          password: password,
-          notes: notes.isNotEmpty ? notes : null,
+          id: 'txt_${DateTime.now().millisecondsSinceEpoch}_${imported.length}',
+          service: curService,
+          category: curCat.isNotEmpty ? curCat : 'Khác',
+          username: curUser,
+          password: curPass,
+          notes: curNote.isNotEmpty ? curNote : null,
           updatedAt: DateTime.now().millisecondsSinceEpoch,
         ));
       }
+      curService = '';
+      curCat = 'Khác';
+      curUser = '';
+      curPass = '';
+      curNote = '';
     }
+
+    for (final line in allTextLines) {
+      if (RegExp(r'^[-=]{4,}$').hasMatch(line)) {
+        commitCurrent();
+        continue;
+      }
+
+      final headerMatch = RegExp(r'^[-*#s]*[(?:MỤCs*)?(d+)[^]]*]s*(.*)$', caseSensitive: false).firstMatch(line);
+      if (headerMatch != null) {
+        commitCurrent();
+        final rest = (headerMatch.group(2) ?? '').replaceAll(RegExp(r'^[-*#s]+|[-*#s]+$'), '').trim();
+        if (rest.toLowerCase().startsWith('dịch vụ:')) {
+          final after = rest.substring(8).trim();
+          if (after.contains('(') && after.contains(')')) {
+            curService = after.split('(')[0].trim();
+            curCat = after.split('(')[1].replaceAll(')', '').trim();
+          } else {
+            curService = after;
+          }
+        } else if (rest.isNotEmpty) {
+          curService = rest.split('(')[0].trim();
+          if (rest.contains('(') && rest.contains(')')) {
+            curCat = rest.split('(')[1].replaceAll(')', '').trim();
+          }
+        }
+        continue;
+      }
+
+      final lower = line.toLowerCase();
+      if (lower.startsWith('dịch vụ:') || lower.startsWith('service:') || lower.startsWith('ứng dụng:')) {
+        final parts = line.split(':');
+        final val = parts.length > 1 ? parts.sublist(1).join(':').trim() : '';
+        if (curService.isNotEmpty && (curUser.isNotEmpty || curPass.isNotEmpty)) {
+          commitCurrent();
+          curService = val;
+        } else {
+          curService = val;
+        }
+      } else if (lower.startsWith('danh mục:') || lower.startsWith('category:') || lower.startsWith('nhóm:')) {
+        final parts = line.split(':');
+        if (parts.length > 1) curCat = parts.sublist(1).join(':').trim();
+      } else if (lower.contains('tài khoản') || lower.contains('email') || lower.startsWith('username:') || lower.startsWith('user:')) {
+        final parts = line.split(':');
+        if (parts.length > 1) curUser = parts.sublist(1).join(':').trim();
+      } else if (lower.contains('mật khẩu') || lower.contains('password:') || lower.startsWith('pass:') || lower.startsWith('pwd:')) {
+        final parts = line.split(':');
+        if (parts.length > 1) curPass = parts.sublist(1).join(':').trim();
+      } else if (lower.contains('ghi chú') || lower.startsWith('notes:') || lower.startsWith('note:')) {
+        final parts = line.split(':');
+        if (parts.length > 1) curNote = parts.sublist(1).join(':').trim();
+      }
+    }
+    commitCurrent();
 
     return imported;
   }
@@ -1840,7 +1872,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               final isSupportedFile = !isDir &&
                                   (lower.endsWith('.csv') ||
                                       lower.endsWith('.txt') ||
-                                      lower.endsWith('.json'));
+                                      lower.endsWith('.json') ||
+                                      lower.endsWith('.tsv') ||
+                                      lower.endsWith('.bak') ||
+                                      lower.endsWith('.dat'));
 
                               String fileSizeStr = '';
                               if (!isDir && item is File) {
@@ -1848,7 +1883,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   final bytes = item.lengthSync();
                                   fileSizeStr = bytes > 1024
                                       ? '${(bytes / 1024).toStringAsFixed(1)} KB'
-                                      : '$bytes B';
+                                      : '${bytes} B';
                                 } catch (_) {}
                               }
 
