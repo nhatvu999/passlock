@@ -216,7 +216,11 @@ class BackupService {
 
     for (int i = 0; i < items.length; i++) {
       final it = items[i];
-      buffer.write('[${i + 1}] ${it.service.toUpperCase()} (${it.category})
+      buffer.write('--- [${i + 1}] Dịch vụ: ${it.service} (${it.category}) ---
+');
+      buffer.write('Dịch vụ           : ${it.service}
+');
+      buffer.write('Danh mục          : ${it.category}
 ');
       buffer.write('Tài khoản / Email : ${it.username}
 ');
@@ -233,8 +237,15 @@ class BackupService {
   }
 
   static String exportToJSON(List<CredentialItem> items) {
-    final list = items.map((e) => e.toMap()).toList();
-    return const JsonEncoder.withIndent('  ').convert(list);
+    final data = {
+      'app': 'PassLock',
+      'version': '1.0',
+      'format': 'passlock-vault',
+      'exportedAt': DateTime.now().toIso8601String(),
+      'count': items.length,
+      'items': items.map((e) => e.toMap()).toList(),
+    };
+    return const JsonEncoder.withIndent('  ').convert(data);
   }
 
   static Future<void> exportAndShare({
@@ -300,68 +311,122 @@ class BackupService {
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       try {
         final parsed = json.decode(trimmed);
-        final list = parsed is List ? parsed : (parsed['items'] as List? ?? []);
+        final list = parsed is List ? parsed : (parsed['items'] as List? ?? parsed['credentials'] as List? ?? []);
         for (final item in list) {
-          if (item is Map<String, dynamic> &&
-              item['service'] != null &&
-              item['username'] != null &&
-              item['password'] != null) {
-            imported.add(CredentialItem.fromMap(item));
+          if (item is Map<String, dynamic>) {
+            final s = item['service'] ?? item['dich_vu'] ?? item['name'] ?? item['title'];
+            final u = item['username'] ?? item['tai_khoan'] ?? item['email'] ?? item['user'] ?? item['account'];
+            final p = item['password'] ?? item['mat_khau'] ?? item['pass'] ?? item['pwd'];
+            if (s != null && (u != null || p != null)) {
+              imported.add(CredentialItem(
+                id: item['id']?.toString() ?? 'json_${DateTime.now().millisecondsSinceEpoch}_${imported.length}',
+                service: s.toString().trim(),
+                category: item['category']?.toString() ?? item['danh_muc']?.toString() ?? 'Khác',
+                username: u?.toString().trim() ?? '',
+                password: p?.toString() ?? '',
+                notes: item['notes']?.toString() ?? item['ghi_chu']?.toString(),
+                updatedAt: DateTime.now().millisecondsSinceEpoch,
+              ));
+            }
           }
         }
         if (imported.isNotEmpty) return imported;
       } catch (_) {}
     }
 
-    // 2. Parse CSV
+    // 2. Parse CSV (Tự phát hiện phân cách dấu phẩy, chấm phẩy hoặc tab và tự khớp tiêu đề cột)
     final lines = trimmed.split(RegExp(r'
 ?
 ')).where((l) => l.trim().isNotEmpty).toList();
-    if (lines.length > 1 && lines[0].contains(',')) {
-      final startIndex = lines[0].toLowerCase().contains('dịch vụ') || lines[0].toLowerCase().contains('service') ? 1 : 0;
-      for (int i = startIndex; i < lines.length; i++) {
-        final line = lines[i];
-        final values = <String>[];
-        var inQuotes = false;
-        var current = '';
-        for (int c = 0; c < line.length; c++) {
-          final char = line[c];
-          if (char == '"') {
-            inQuotes = !inQuotes;
-          } else if (char == ',' && !inQuotes) {
-            values.add(_cleanCsvCell(current));
-            current = '';
-          } else {
-            current += char;
-          }
-        }
-        values.add(_cleanCsvCell(current));
-
-        if (values.length >= 3) {
-          final s = values[0];
-          final c = values.length > 1 ? values[1] : 'Khác';
-          final u = values.length > 2 ? values[2] : '';
-          final p = values.length > 3 ? values[3] : '';
-          final n = values.length > 4 ? values[4] : null;
-
-          if (s.isNotEmpty && (u.isNotEmpty || p.isNotEmpty)) {
-            imported.add(CredentialItem(
-              id: 'csv_${DateTime.now().millisecondsSinceEpoch}_$i',
-              service: s,
-              category: c.isNotEmpty ? c : 'Khác',
-              username: u,
-              password: p,
-              notes: n != null && n.isNotEmpty ? n : null,
-              updatedAt: DateTime.now().millisecondsSinceEpoch,
-            ));
-          }
-        }
+    if (lines.isNotEmpty) {
+      final firstLine = lines[0];
+      String delimiter = ',';
+      final commaCount = ','.allMatches(firstLine).length;
+      final semiCount = ';'.allMatches(firstLine).length;
+      final tabCount = '	'.allMatches(firstLine).length;
+      if (semiCount > commaCount && semiCount >= tabCount) {
+        delimiter = ';';
+      } else if (tabCount > commaCount && tabCount > semiCount) {
+        delimiter = '	';
       }
-      if (imported.isNotEmpty) return imported;
+
+      if (lines.length > 1 || (lines.length == 1 && lines[0].contains(delimiter))) {
+        List<String> parseCsvLine(String line) {
+          final values = <String>[];
+          var inQuotes = false;
+          var current = '';
+          for (int c = 0; c < line.length; c++) {
+            final char = line[c];
+            if (char == '"') {
+              inQuotes = !inQuotes;
+            } else if (char == delimiter && !inQuotes) {
+              values.add(_cleanCsvCell(current));
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          values.add(_cleanCsvCell(current));
+          return values;
+        }
+
+        final headerValues = parseCsvLine(firstLine).map((v) => v.toLowerCase()).toList();
+        final isHeader = headerValues.any((h) =>
+          h.contains('dịch vụ') || h.contains('service') || h.contains('tài khoản') || h.contains('user') || h.contains('mật khẩu') || h.contains('pass')
+        );
+
+        int sIdx = 0;
+        int cIdx = 1;
+        int uIdx = 2;
+        int pIdx = 3;
+        int nIdx = 4;
+
+        if (isHeader) {
+          for (int h = 0; h < headerValues.length; h++) {
+            final hv = headerValues[h];
+            if (hv.contains('dịch vụ') || hv.contains('service') || hv.contains('app')) {
+              sIdx = h;
+            } else if (hv.contains('danh mục') || hv.contains('category') || hv.contains('nhóm')) {
+              cIdx = h;
+            } else if (hv.contains('tài khoản') || hv.contains('user') || hv.contains('email') || hv.contains('account')) {
+              uIdx = h;
+            } else if (hv.contains('mật khẩu') || hv.contains('pass') || hv.contains('pwd')) {
+              pIdx = h;
+            } else if (hv.contains('ghi chú') || hv.contains('note')) {
+              nIdx = h;
+            }
+          }
+        }
+
+        final startRow = isHeader ? 1 : 0;
+        for (int i = startRow; i < lines.length; i++) {
+          final values = parseCsvLine(lines[i]);
+          if (values.length >= 2) {
+            final s = sIdx < values.length ? values[sIdx] : values[0];
+            final c = (cIdx < values.length && values[cIdx].isNotEmpty) ? values[cIdx] : 'Khác';
+            final u = uIdx < values.length ? values[uIdx] : (values.length > 2 ? values[2] : values[1]);
+            final p = pIdx < values.length ? values[pIdx] : (values.length > 3 ? values[3] : values.last);
+            final n = nIdx < values.length && values[nIdx].isNotEmpty ? values[nIdx] : null;
+
+            if (s.isNotEmpty && (u.isNotEmpty || p.isNotEmpty)) {
+              imported.add(CredentialItem(
+                id: 'csv_${DateTime.now().millisecondsSinceEpoch}_$i',
+                service: s,
+                category: c,
+                username: u,
+                password: p,
+                notes: n,
+                updatedAt: DateTime.now().millisecondsSinceEpoch,
+              ));
+            }
+          }
+        }
+        if (imported.isNotEmpty) return imported;
+      }
     }
 
-    // 3. Parse TXT (Khối bản sao lưu văn bản PassLock Vault chuẩn)
-    final blocks = trimmed.split(RegExp(r'-{10,}|={10,}'));
+    // 3. Parse TXT (Khối bản sao lưu văn bản PassLock Vault chuẩn & sổ ghi chép)
+    final blocks = trimmed.split(RegExp(r'-{10,}|={10,}|-{3,}'));
     for (int b = 0; b < blocks.length; b++) {
       final block = blocks[b];
       final bLines = block.split(RegExp(r'
@@ -376,20 +441,27 @@ class BackupService {
       for (final line in bLines) {
         if (line.startsWith('[') && line.contains(']')) {
           final afterBracket = line.substring(line.indexOf(']') + 1).trim();
-          if (afterBracket.contains('(') && afterBracket.contains(')')) {
-            service = afterBracket.split('(')[0].trim();
-            final catPart = afterBracket.split('(')[1];
+          final cleanAfter = afterBracket.toLowerCase().startsWith('dịch vụ:') ? afterBracket.substring(8).trim() : afterBracket;
+          if (cleanAfter.contains('(') && cleanAfter.contains(')')) {
+            service = cleanAfter.split('(')[0].trim();
+            final catPart = cleanAfter.split('(')[1];
             category = catPart.replaceAll(')', '').trim();
           } else {
-            service = afterBracket.trim();
+            service = cleanAfter.trim();
           }
-        } else if (line.toLowerCase().contains('tài khoản') || line.toLowerCase().contains('email')) {
+        } else if (line.toLowerCase().startsWith('dịch vụ') || line.toLowerCase().startsWith('service:')) {
+          final parts = line.split(':');
+          if (parts.length > 1) service = parts.sublist(1).join(':').trim();
+        } else if (line.toLowerCase().startsWith('danh mục') || line.toLowerCase().startsWith('category:')) {
+          final parts = line.split(':');
+          if (parts.length > 1) category = parts.sublist(1).join(':').trim();
+        } else if (line.toLowerCase().contains('tài khoản') || line.toLowerCase().contains('email') || line.toLowerCase().startsWith('user:')) {
           final parts = line.split(':');
           if (parts.length > 1) username = parts.sublist(1).join(':').trim();
-        } else if (line.toLowerCase().contains('mật khẩu') || line.toLowerCase().contains('pass')) {
+        } else if (line.toLowerCase().contains('mật khẩu') || line.toLowerCase().contains('pass') || line.toLowerCase().startsWith('password:')) {
           final parts = line.split(':');
           if (parts.length > 1) password = parts.sublist(1).join(':').trim();
-        } else if (line.toLowerCase().contains('ghi chú') || line.toLowerCase().contains('note')) {
+        } else if (line.toLowerCase().contains('ghi chú') || line.toLowerCase().contains('note:')) {
           final parts = line.split(':');
           if (parts.length > 1) notes = parts.sublist(1).join(':').trim();
         }
@@ -1311,9 +1383,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             content: Text(
-              'Trình chọn file hệ thống chưa phản hồi ($e).
-
-Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán nội dung sao lưu từ Clipboard!',
+              'Trình chọn file hệ thống chưa phản hồi. Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán nội dung sao lưu từ Clipboard!',
               style: TextStyle(
                 fontSize: 13,
                 color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569),
@@ -1345,6 +1415,7 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
 
   Future<void> _openFolderExplorer() async {
     final List<Map<String, dynamic>> rootDirs = [];
+    final List<File> discoveredBackups = [];
     Directory? initialDir;
 
     try {
@@ -1364,14 +1435,34 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
         'badge': 'Nội Bộ',
       });
       initialDir = backupDir;
+
+      // Quét tìm tất cả các file sao lưu có sẵn trong bộ nhớ an toàn của app
+      for (final d in [backupDir, appDocDir]) {
+        if (d.existsSync()) {
+          for (final f in d.listSync()) {
+            if (f is File) {
+              final lower = f.path.toLowerCase();
+              if (lower.endsWith('.csv') || lower.endsWith('.txt') || lower.endsWith('.json')) {
+                discoveredBackups.add(f);
+              }
+            }
+          }
+        }
+      }
     } catch (_) {}
 
-    final dlDir = Directory('/storage/emulated/0/Download');
-    rootDirs.add({
-      'title': '📥 Tải Về (Download)',
-      'dir': dlDir,
-      'badge': 'Máy',
-    });
+    try {
+      final tempDir = await getTemporaryDirectory();
+      if (tempDir.existsSync()) {
+        for (final f in tempDir.listSync()) {
+          if (f is File && f.path.contains('passlock_backup')) {
+            if (!discoveredBackups.any((b) => b.path == f.path)) {
+              discoveredBackups.add(f);
+            }
+          }
+        }
+      }
+    } catch (_) {}
 
     try {
       final extDir = await getExternalStorageDirectory();
@@ -1381,8 +1472,27 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
           'dir': extDir,
           'badge': 'SD',
         });
+        if (extDir.existsSync()) {
+          for (final f in extDir.listSync()) {
+            if (f is File) {
+              final lower = f.path.toLowerCase();
+              if (lower.endsWith('.csv') || lower.endsWith('.txt') || lower.endsWith('.json')) {
+                if (!discoveredBackups.any((b) => b.path == f.path)) {
+                  discoveredBackups.add(f);
+                }
+              }
+            }
+          }
+        }
       }
     } catch (_) {}
+
+    final dlDir = Directory('/storage/emulated/0/Download');
+    rootDirs.add({
+      'title': '📥 Tải Về (Download)',
+      'dir': dlDir,
+      'badge': 'Máy',
+    });
 
     Directory currentDir = initialDir ?? dlDir;
 
@@ -1420,7 +1530,7 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
           final canGoUp = currentDir.path != '/' && currentDir.path != parentDir.path;
 
           return Container(
-            height: MediaQuery.of(context).size.height * 0.8,
+            height: MediaQuery.of(context).size.height * 0.85,
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1457,7 +1567,96 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
+
+                // Thanh phím tắt tiện ích: Bộ chọn file máy + Dán Clipboard
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                            side: BorderSide(color: const Color(0xFF0284C7).withOpacity(0.5)),
+                          ),
+                          icon: const Icon(Icons.file_open, size: 14, color: Color(0xFF38BDF8)),
+                          label: const Text('App Duyệt File Máy', style: TextStyle(fontSize: 11, color: Color(0xFF38BDF8))),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _pickFileFromDevice();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                            side: BorderSide(color: Colors.purple.withOpacity(0.5)),
+                          ),
+                          icon: const Icon(Icons.paste, size: 14, color: Colors.purpleAccent),
+                          label: const Text('Dán Clipboard', style: TextStyle(fontSize: 11, color: Colors.purpleAccent)),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _showImportDialog();
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Danh sách tệp sao lưu đã phát hiện sẵn trên máy (nếu có)
+                if (discoveredBackups.isNotEmpty) ...[
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0284C7).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF0284C7).withOpacity(0.25)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF38BDF8)),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Tệp sao lưu sẵn có trên máy (${discoveredBackups.length}):',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: discoveredBackups.map((bf) {
+                              final bName = bf.path.split('/').last;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: ActionChip(
+                                  avatar: const Icon(Icons.file_present, size: 14, color: Colors.white),
+                                  backgroundColor: const Color(0xFF0284C7),
+                                  label: Text(
+                                    bName.length > 25 ? '${bName.substring(0, 22)}...' : bName,
+                                    style: const TextStyle(fontSize: 11, color: Colors.white),
+                                  ),
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    _importFromFile(bf);
+                                  },
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
 
                 // Lựa chọn nhanh các thư mục chính (Quick Folder Tabs)
                 SingleChildScrollView(
@@ -1544,7 +1743,7 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Hãy chuyển sang thư mục "Sao Lưu PassLock" (luôn khả dụng) hoặc dùng Bộ Chọn File Hệ Thống:',
+                              'Hệ điều hành Android bảo mật thư mục này. Bạn có thể mở Trình Duyệt File của máy để chọn tự do:',
                               style: TextStyle(
                                 fontSize: 11,
                                 color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
@@ -1558,7 +1757,7 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
                                 foregroundColor: Colors.white,
                               ),
                               icon: const Icon(Icons.file_open, size: 16),
-                              label: const Text('Dùng Bộ Chọn File Hệ Thống (SAF)'),
+                              label: const Text('Mở Trình Chọn File Hệ Thống (SAF)'),
                               onPressed: () {
                                 Navigator.pop(ctx);
                                 _pickFileFromDevice();
@@ -1590,10 +1789,10 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.folder_open, size: 44, color: _isDarkMode ? Colors.slate.shade700 : Colors.grey.shade400),
+                                  Icon(Icons.folder_open, size: 44, color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade400),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Không tìm thấy file sao lưu trong thư mục này',
+                                    'Thư mục hiện tại chưa có file',
                                     style: TextStyle(
                                       color: _isDarkMode ? const Color(0xFF94A3B8) : Colors.grey.shade600,
                                       fontSize: 13,
@@ -1603,12 +1802,25 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    'Bạn có thể xuất file trước hoặc chọn thẻ "Sao Lưu PassLock" ở trên.',
+                                    'Bạn có thể dùng Bộ Chọn File Hệ Thống để tìm file trong Download, Drive hoặc Thẻ nhớ.',
                                     style: TextStyle(
                                       color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
                                       fontSize: 11,
                                     ),
                                     textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF0284C7),
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    icon: const Icon(Icons.file_open, size: 16),
+                                    label: const Text('Mở Bộ Chọn Tệp Máy'),
+                                    onPressed: () {
+                                      Navigator.pop(ctx);
+                                      _pickFileFromDevice();
+                                    },
                                   ),
                                 ],
                               ),
@@ -1686,10 +1898,10 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
                                         ),
                                       )
                                     : null,
-                                trailing: isSupportedFile
+                                trailing: !isDir
                                     ? ElevatedButton(
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: const Color(0xFF0284C7),
+                                          backgroundColor: isSupportedFile ? const Color(0xFF0284C7) : const Color(0xFF475569),
                                           foregroundColor: Colors.white,
                                           minimumSize: const Size(54, 28),
                                           padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -1698,15 +1910,15 @@ Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán
                                           Navigator.pop(ctx);
                                           _importFromFile(File(item.path));
                                         },
-                                        child: const Text('Nạp', style: TextStyle(fontSize: 11)),
+                                        child: Text(isSupportedFile ? 'Nạp' : 'Chọn', style: const TextStyle(fontSize: 11)),
                                       )
-                                    : (isDir ? const Icon(Icons.chevron_right, size: 18, color: Colors.grey) : null),
+                                    : const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
                                 onTap: () {
                                   if (isDir) {
                                     setExplorerState(() {
                                       currentDir = item;
                                     });
-                                  } else if (isSupportedFile) {
+                                  } else {
                                     Navigator.pop(ctx);
                                     _importFromFile(File(item.path));
                                   }
