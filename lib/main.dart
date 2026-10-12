@@ -182,35 +182,52 @@ class SecureStorageService {
 class BackupService {
   static String exportToCSV(List<CredentialItem> items) {
     final buffer = StringBuffer();
-    buffer.writeln('"Dịch vụ","Danh mục","Tài khoản/Email","Mật khẩu","Ghi chú"');
+    // Thêm ký tự UTF-8 BOM (﻿) ở đầu file để Microsoft Excel hiển thị chuẩn 100% tiếng Việt
+    buffer.write('﻿');
+    buffer.write('"Dịch vụ","Danh mục","Tài khoản/Email","Mật khẩu","Ghi chú"
+');
     for (final it in items) {
       final s = it.service.replaceAll('"', '""');
       final c = it.category.replaceAll('"', '""');
       final u = it.username.replaceAll('"', '""');
       final p = it.password.replaceAll('"', '""');
       final n = (it.notes ?? '').replaceAll('"', '""');
-      buffer.writeln('"$s","$c","$u","$p","$n"');
+      buffer.write('"$s","$c","$u","$p","$n"
+');
     }
     return buffer.toString();
   }
 
   static String exportToTXT(List<CredentialItem> items) {
     final buffer = StringBuffer();
-    buffer.writeln('==================================================');
-    buffer.writeln('       BẢN SAO LƯU MẬT KHẨU PASSLOCK VAULT        ');
-    buffer.writeln('       Ngày xuất: ${DateTime.now().toLocal()}     ');
-    buffer.writeln('       Tổng số tài khoản: ${items.length}        ');
-    buffer.writeln('==================================================\n');
+    // Thêm ký tự UTF-8 BOM (﻿) để Notepad hiển thị chuẩn font tiếng Việt
+    buffer.write('﻿');
+    buffer.write('==================================================
+');
+    buffer.write('       BẢN SAO LƯU MẬT KHẨU PASSLOCK VAULT        
+');
+    buffer.write('       Ngày xuất: ${DateTime.now().toLocal()}     
+');
+    buffer.write('       Tổng số tài khoản: ${items.length}        
+');
+    buffer.write('==================================================
+
+');
 
     for (int i = 0; i < items.length; i++) {
       final it = items[i];
-      buffer.writeln('[${i + 1}] ${it.service.toUpperCase()} (${it.category})');
-      buffer.writeln('Tài khoản / Email : ${it.username}');
-      buffer.writeln('Mật khẩu          : ${it.password}');
+      buffer.write('[${i + 1}] ${it.service.toUpperCase()} (${it.category})
+');
+      buffer.write('Tài khoản / Email : ${it.username}
+');
+      buffer.write('Mật khẩu          : ${it.password}
+');
       if (it.notes != null && it.notes!.isNotEmpty) {
-        buffer.writeln('Ghi chú           : ${it.notes}');
+        buffer.write('Ghi chú           : ${it.notes}
+');
       }
-      buffer.writeln('--------------------------------------------------');
+      buffer.write('--------------------------------------------------
+');
     }
     return buffer.toString();
   }
@@ -233,20 +250,50 @@ class BackupService {
     } else {
       content = exportToJSON(items);
     }
+
+    final timeStamp = DateTime.now().millisecondsSinceEpoch;
+    final fileName = 'passlock_backup_$timeStamp.$format';
+
+    // Chèn chính xác mảng 3 byte UTF-8 BOM: 0xEF, 0xBB, 0xBF vào nhị phân file
+    // Điều này đảm bảo 100% Microsoft Excel, Notepad, Google Sheets không bị lỗi font Tiếng Việt
+    final cleanContent = content.startsWith('﻿') ? content.substring(1) : content;
+    final fileBytes = format == 'json'
+        ? utf8.encode(content)
+        : [0xEF, 0xBB, 0xBF, ...utf8.encode(cleanContent)];
+
+    // 1. Lưu bản sao lưu vào thư mục Documents của ứng dụng (luôn đọc được 100% không bị Scoped Storage chặn)
+    try {
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final backupDir = Directory('${appDocDir.path}/PassLock_Backups');
+      if (!await backupDir.exists()) {
+        await backupDir.create(recursive: true);
+      }
+      final localBackupFile = File('${backupDir.path}/$fileName');
+      await localBackupFile.writeAsBytes(fileBytes);
+    } catch (_) {}
+
+    // 2. Lưu vào thư mục tạm và kích hoạt chia sẻ hệ thống với mimeType utf-8 chuẩn
     final dir = await getTemporaryDirectory();
-    final fileName = 'passlock_backup_${DateTime.now().millisecondsSinceEpoch}.$format';
     final file = File('${dir.path}/$fileName');
-    await file.writeAsString(content, encoding: utf8);
+    await file.writeAsBytes(fileBytes);
+
+    final mimeType = format == 'csv'
+        ? 'text/csv;charset=utf-8'
+        : (format == 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8');
 
     await Share.shareXFiles(
-      [XFile(file.path)],
+      [XFile(file.path, mimeType: mimeType, name: fileName)],
       text: 'Bản sao lưu mật khẩu PassLock (${items.length} tài khoản)',
       subject: 'Sao lưu PassLock Vault',
     );
   }
 
   static List<CredentialItem> parseUniversal(String content) {
-    final trimmed = content.trim();
+    var clean = content.trim();
+    while (clean.isNotEmpty && (clean.startsWith('﻿') || clean.codeUnitAt(0) == 0xFEFF)) {
+      clean = clean.substring(1).trim();
+    }
+    final trimmed = clean;
     final List<CredentialItem> imported = [];
 
     // 1. Parse JSON
@@ -267,7 +314,9 @@ class BackupService {
     }
 
     // 2. Parse CSV
-    final lines = trimmed.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+    final lines = trimmed.split(RegExp(r'
+?
+')).where((l) => l.trim().isNotEmpty).toList();
     if (lines.length > 1 && lines[0].contains(',')) {
       final startIndex = lines[0].toLowerCase().contains('dịch vụ') || lines[0].toLowerCase().contains('service') ? 1 : 0;
       for (int i = startIndex; i < lines.length; i++) {
@@ -288,19 +337,77 @@ class BackupService {
         }
         values.add(_cleanCsvCell(current));
 
-        if (values.length >= 4) {
-          imported.add(CredentialItem(
-            id: 'imp_${DateTime.now().millisecondsSinceEpoch}_$i',
-            service: values[0],
-            category: values.length > 1 ? values[1] : 'Khác',
-            username: values.length > 2 ? values[2] : '',
-            password: values.length > 3 ? values[3] : '',
-            notes: values.length > 4 ? values[4] : null,
-            updatedAt: DateTime.now().millisecondsSinceEpoch,
-          ));
+        if (values.length >= 3) {
+          final s = values[0];
+          final c = values.length > 1 ? values[1] : 'Khác';
+          final u = values.length > 2 ? values[2] : '';
+          final p = values.length > 3 ? values[3] : '';
+          final n = values.length > 4 ? values[4] : null;
+
+          if (s.isNotEmpty && (u.isNotEmpty || p.isNotEmpty)) {
+            imported.add(CredentialItem(
+              id: 'csv_${DateTime.now().millisecondsSinceEpoch}_$i',
+              service: s,
+              category: c.isNotEmpty ? c : 'Khác',
+              username: u,
+              password: p,
+              notes: n != null && n.isNotEmpty ? n : null,
+              updatedAt: DateTime.now().millisecondsSinceEpoch,
+            ));
+          }
         }
       }
+      if (imported.isNotEmpty) return imported;
     }
+
+    // 3. Parse TXT (Khối bản sao lưu văn bản PassLock Vault chuẩn)
+    final blocks = trimmed.split(RegExp(r'-{10,}|={10,}'));
+    for (int b = 0; b < blocks.length; b++) {
+      final block = blocks[b];
+      final bLines = block.split(RegExp(r'
+?
+')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+      String service = '';
+      String category = 'Khác';
+      String username = '';
+      String password = '';
+      String notes = '';
+
+      for (final line in bLines) {
+        if (line.startsWith('[') && line.contains(']')) {
+          final afterBracket = line.substring(line.indexOf(']') + 1).trim();
+          if (afterBracket.contains('(') && afterBracket.contains(')')) {
+            service = afterBracket.split('(')[0].trim();
+            final catPart = afterBracket.split('(')[1];
+            category = catPart.replaceAll(')', '').trim();
+          } else {
+            service = afterBracket.trim();
+          }
+        } else if (line.toLowerCase().contains('tài khoản') || line.toLowerCase().contains('email')) {
+          final parts = line.split(':');
+          if (parts.length > 1) username = parts.sublist(1).join(':').trim();
+        } else if (line.toLowerCase().contains('mật khẩu') || line.toLowerCase().contains('pass')) {
+          final parts = line.split(':');
+          if (parts.length > 1) password = parts.sublist(1).join(':').trim();
+        } else if (line.toLowerCase().contains('ghi chú') || line.toLowerCase().contains('note')) {
+          final parts = line.split(':');
+          if (parts.length > 1) notes = parts.sublist(1).join(':').trim();
+        }
+      }
+
+      if (service.isNotEmpty && (username.isNotEmpty || password.isNotEmpty)) {
+        imported.add(CredentialItem(
+          id: 'txt_${DateTime.now().millisecondsSinceEpoch}_$b',
+          service: service,
+          category: category.isNotEmpty ? category : 'Khác',
+          username: username,
+          password: password,
+          notes: notes.isNotEmpty ? notes : null,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        ));
+      }
+    }
+
     return imported;
   }
 
@@ -595,9 +702,12 @@ class NativeFilePicker {
         };
       }
       return null;
+    } on MissingPluginException {
+      throw 'Dự án Android chưa liên kết MainActivity.kt. Đang chuyển sang Kho Tệp Sao Lưu trên máy...';
+    } on PlatformException catch (pe) {
+      throw 'Không thể gọi trình duyệt file: ${pe.message ?? pe.code}';
     } catch (e) {
-      debugPrint('Lỗi NativeFilePicker: $e');
-      return null;
+      throw 'Không thể mở bộ chọn file: $e';
     }
   }
 }
@@ -1073,7 +1183,13 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         return;
       }
-      final content = await file.readAsString();
+      String content;
+      try {
+        content = await file.readAsString(encoding: utf8);
+      } catch (_) {
+        final bytes = await file.readAsBytes();
+        content = utf8.decode(bytes, allowMalformed: true);
+      }
       final imported = BackupService.parseUniversal(content);
       if (imported.isNotEmpty) {
         for (final item in imported) {
@@ -1087,7 +1203,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
                   const SizedBox(width: 8),
-                  Text('Đã nạp thành công ${imported.length} tài khoản từ file!'),
+                  Expanded(
+                    child: Text('Đã nạp thành công ${imported.length} tài khoản từ file!'),
+                  ),
                 ],
               ),
               backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
@@ -1171,10 +1289,54 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Lỗi khi mở file: $e'),
-            behavior: SnackBarBehavior.floating,
+        showDialog(
+          context: context,
+          builder: (dialogCtx) => AlertDialog(
+            backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              children: [
+                const Icon(Icons.folder_open_rounded, color: Color(0xFF0284C7), size: 24),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Bộ Chọn File Hệ Thống',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'Trình chọn file hệ thống chưa phản hồi ($e).
+
+Bạn có thể duyệt trực tiếp Thư Mục Sao Lưu trên máy hoặc Dán nội dung sao lưu từ Clipboard!',
+              style: TextStyle(
+                fontSize: 13,
+                color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: const Text('Đóng'),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0284C7),
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(Icons.folder_shared, size: 16),
+                label: const Text('Duyệt Thư Mục Máy'),
+                onPressed: () {
+                  Navigator.pop(dialogCtx);
+                  _openFolderExplorer();
+                },
+              ),
+            ],
           ),
         );
       }
@@ -1182,16 +1344,47 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openFolderExplorer() async {
-    Directory currentDir = Directory('/storage/emulated/0/Download');
-    if (!await currentDir.exists()) {
-      currentDir = Directory('/storage/emulated/0');
-      if (!await currentDir.exists()) {
-        try {
-          final extDir = await getExternalStorageDirectory();
-          if (extDir != null) currentDir = extDir;
-        } catch (_) {}
+    final List<Map<String, dynamic>> rootDirs = [];
+    Directory? initialDir;
+
+    try {
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final backupDir = Directory('${appDocDir.path}/PassLock_Backups');
+      if (!await backupDir.exists()) {
+        await backupDir.create(recursive: true);
       }
-    }
+      rootDirs.add({
+        'title': '⭐ Sao Lưu PassLock',
+        'dir': backupDir,
+        'badge': 'An Toàn 100%',
+      });
+      rootDirs.add({
+        'title': '📂 Tài Liệu App',
+        'dir': appDocDir,
+        'badge': 'Nội Bộ',
+      });
+      initialDir = backupDir;
+    } catch (_) {}
+
+    final dlDir = Directory('/storage/emulated/0/Download');
+    rootDirs.add({
+      'title': '📥 Tải Về (Download)',
+      'dir': dlDir,
+      'badge': 'Máy',
+    });
+
+    try {
+      final extDir = await getExternalStorageDirectory();
+      if (extDir != null) {
+        rootDirs.add({
+          'title': '💾 Bộ Nhớ Ngoài',
+          'dir': extDir,
+          'badge': 'SD',
+        });
+      }
+    } catch (_) {}
+
+    Directory currentDir = initialDir ?? dlDir;
 
     if (!mounted) return;
 
@@ -1220,14 +1413,14 @@ class _HomeScreenState extends State<HomeScreen> {
               readError = 'Thư mục không tồn tại';
             }
           } catch (e) {
-            readError = 'Không thể truy cập thư mục này (giới hạn quyền Android)';
+            readError = 'Android Scoped Storage giới hạn đọc trực tiếp thư mục này.';
           }
 
           final parentDir = currentDir.parent;
           final canGoUp = currentDir.path != '/' && currentDir.path != parentDir.path;
 
           return Container(
-            height: MediaQuery.of(context).size.height * 0.75,
+            height: MediaQuery.of(context).size.height * 0.8,
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1249,7 +1442,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Trình Duyệt Tệp Trên Máy',
+                        'Duyệt Cây Thư Mục Thiết Bị',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
@@ -1265,6 +1458,40 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
+
+                // Lựa chọn nhanh các thư mục chính (Quick Folder Tabs)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: rootDirs.map((r) {
+                      final rDir = r['dir'] as Directory;
+                      final isSelected = currentDir.path.startsWith(rDir.path);
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: Text(r['title'] as String, style: const TextStyle(fontSize: 11)),
+                          selected: isSelected,
+                          onSelected: (_) {
+                            setExplorerState(() {
+                              currentDir = rDir;
+                            });
+                          },
+                          selectedColor: const Color(0xFF0284C7).withOpacity(0.3),
+                          backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                          labelStyle: TextStyle(
+                            color: isSelected
+                                ? const Color(0xFF38BDF8)
+                                : (_isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569)),
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Đường dẫn thư mục hiện tại & nút Lên thư mục cha
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
@@ -1301,40 +1528,89 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 10),
                 if (readError != null)
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        Text(
-                          readError!,
-                          style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-                          textAlign: TextAlign.center,
+                  Expanded(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.lock_clock_outlined, size: 40, color: Colors.amber),
+                            const SizedBox(height: 10),
+                            Text(
+                              readError!,
+                              style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Hãy chuyển sang thư mục "Sao Lưu PassLock" (luôn khả dụng) hoặc dùng Bộ Chọn File Hệ Thống:',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 14),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0284C7),
+                                foregroundColor: Colors.white,
+                              ),
+                              icon: const Icon(Icons.file_open, size: 16),
+                              label: const Text('Dùng Bộ Chọn File Hệ Thống (SAF)'),
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _pickFileFromDevice();
+                              },
+                            ),
+                            if (rootDirs.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              TextButton.icon(
+                                icon: const Icon(Icons.star_rounded, size: 16, color: Color(0xFF38BDF8)),
+                                label: const Text('Về Thư Mục Sao Lưu PassLock'),
+                                onPressed: () {
+                                  setExplorerState(() {
+                                    currentDir = rootDirs.first['dir'] as Directory;
+                                  });
+                                },
+                              ),
+                            ],
+                          ],
                         ),
-                        const SizedBox(height: 12),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0284C7),
-                            foregroundColor: Colors.white,
-                          ),
-                          icon: const Icon(Icons.file_open, size: 16),
-                          label: const Text('Dùng Bộ Chọn File Hệ Thống (Khuyên Dùng)'),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _pickFileFromDevice();
-                          },
-                        ),
-                      ],
+                      ),
                     ),
                   )
                 else
                   Expanded(
                     child: entities.isEmpty
                         ? Center(
-                            child: Text(
-                              'Thư mục trống',
-                              style: TextStyle(
-                                color: _isDarkMode ? const Color(0xFF94A3B8) : Colors.grey,
-                                fontSize: 13,
+                            child: Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.folder_open, size: 44, color: _isDarkMode ? Colors.slate.shade700 : Colors.grey.shade400),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Không tìm thấy file sao lưu trong thư mục này',
+                                    style: TextStyle(
+                                      color: _isDarkMode ? const Color(0xFF94A3B8) : Colors.grey.shade600,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Bạn có thể xuất file trước hoặc chọn thẻ "Sao Lưu PassLock" ở trên.',
+                                    style: TextStyle(
+                                      color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
+                                      fontSize: 11,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
                               ),
                             ),
                           )
@@ -1353,6 +1629,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                   (lower.endsWith('.csv') ||
                                       lower.endsWith('.txt') ||
                                       lower.endsWith('.json'));
+
+                              String fileSizeStr = '';
+                              if (!isDir && item is File) {
+                                try {
+                                  final bytes = item.lengthSync();
+                                  fileSizeStr = bytes > 1024
+                                      ? '${(bytes / 1024).toStringAsFixed(1)} KB'
+                                      : '$bytes B';
+                                } catch (_) {}
+                              }
 
                               return ListTile(
                                 dense: true,
@@ -1391,6 +1677,15 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
+                                subtitle: fileSizeStr.isNotEmpty
+                                    ? Text(
+                                        fileSizeStr,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
+                                        ),
+                                      )
+                                    : null,
                                 trailing: isSupportedFile
                                     ? ElevatedButton(
                                         style: ElevatedButton.styleFrom(
@@ -1430,11 +1725,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _openFileImportDialog() async {
     final List<File> foundFiles = [];
-    final scanDirs = [
+    final List<Directory> scanDirs = [];
+
+    try {
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final backupDir = Directory('${appDocDir.path}/PassLock_Backups');
+      if (await backupDir.exists()) {
+        scanDirs.add(backupDir);
+      }
+      scanDirs.add(appDocDir);
+    } catch (_) {}
+
+    try {
+      final extDir = await getExternalStorageDirectory();
+      if (extDir != null && await extDir.exists()) {
+        scanDirs.add(extDir);
+      }
+    } catch (_) {}
+
+    scanDirs.addAll([
       Directory('/storage/emulated/0/Download'),
       Directory('/sdcard/Download'),
       Directory('/storage/emulated/0/Documents'),
-    ];
+    ]);
 
     for (final dir in scanDirs) {
       if (await dir.exists()) {
@@ -1444,7 +1757,10 @@ class _HomeScreenState extends State<HomeScreen> {
             if (item is File) {
               final pathLower = item.path.toLowerCase();
               if (pathLower.endsWith('.csv') || pathLower.endsWith('.txt') || pathLower.endsWith('.json')) {
-                foundFiles.add(item);
+                // Tránh trùng lặp
+                if (!foundFiles.any((f) => f.path == item.path)) {
+                  foundFiles.add(item);
+                }
               }
             }
           }
