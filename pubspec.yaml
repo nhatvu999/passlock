@@ -14,14 +14,14 @@ dependencies:
   flutter_secure_storage: ^9.2.2
   # Xuất file và chia sẻ qua Drive, Zalo, Gmail hoặc lưu vào máy
   share_plus: ^10.1.2
-  # Trình chọn file hệ thống đa nền tảng chuẩn Flutter (chọn file từ mọi app duyệt file, Downloads, Google Drive)
-  file_picker: ^8.1.7
   # Thư mục lưu file trên thiết bị
   path_provider: ^2.1.5
   # Icon giao diện hiện đại
   cupertino_icons: ^1.0.8
   # Sinh chuỗi ngẫu nhiên (UUID cho id tài khoản)
   uuid: ^4.4.0
+  # Trình chọn file hệ thống chuẩn Android
+  file_picker: ^8.1.7
 
 dev_dependencies:
   flutter_test:
