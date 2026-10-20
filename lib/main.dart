@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
 
 // ============================================================================
 // 1. MODEL DỮ LIỆU TÀI KHOẢN (ACCOUNT CREDENTIAL MODEL)
@@ -1282,33 +1283,59 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _importFromFile(File file) async {
+  Future<void> _pickFileFromDevice() async {
     try {
-      String content = '';
+      String? content;
+      String? fileName;
+
+      // 1. Thử dùng FilePicker (Thư viện chuẩn Flutter, tự động liên kết plugin với Android không cần cấu hình MainActivity)
       try {
-        if (await file.exists()) {
-          try {
-            content = await file.readAsString(encoding: utf8);
-          } catch (_) {
-            final bytes = await file.readAsBytes();
-            content = utf8.decode(bytes, allowMalformed: true);
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['csv', 'txt', 'json'],
+          withData: true,
+        );
+
+        if (result != null && result.files.isNotEmpty) {
+          final platformFile = result.files.single;
+          fileName = platformFile.name;
+          if (platformFile.bytes != null) {
+            content = utf8.decode(platformFile.bytes!, allowMalformed: true);
+          } else if (platformFile.path != null) {
+            final f = File(platformFile.path!);
+            if (await f.exists()) {
+              try {
+                content = await f.readAsString(encoding: utf8);
+              } catch (_) {
+                final bytes = await f.readAsBytes();
+                content = utf8.decode(bytes, allowMalformed: true);
+              }
+            }
           }
         }
-      } catch (_) {}
-
-      if (content.trim().isEmpty) {
-        final nativeRes = await NativeFilePicker.readFileByPath(file.path);
-        if (nativeRes != null && nativeRes['content'] != null && nativeRes['content']!.isNotEmpty) {
-          content = nativeRes['content']!;
+      } catch (fpErr) {
+        // 2. Dự phòng: gọi Native SAF qua MethodChannel nếu máy đã liên kết MainActivity
+        try {
+          final nativeRes = await NativeFilePicker.pickFile();
+          if (nativeRes != null) {
+            fileName = nativeRes['name'];
+            content = nativeRes['content'];
+          }
+        } catch (_) {
+          rethrow;
         }
       }
 
-      final fileName = file.path.split('/').last;
-      if (content.trim().isEmpty) {
+      // Người dùng hủy hoặc đóng trình chọn tệp
+      if (fileName == null && content == null) {
+        return;
+      }
+
+      if (content == null || content.trim().isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Không thể đọc file hoặc file rỗng: $fileName'),
+              content: Text('File "${fileName ?? "đã chọn"}" không có nội dung!'),
               behavior: SnackBarBehavior.floating,
             ),
           );
@@ -1343,74 +1370,10 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Không tìm thấy tài khoản hợp lệ trong file!'),
+              content: Text('Không tìm thấy tài khoản hợp lệ trong file đã chọn (.csv, .txt, .json)!'),
               behavior: SnackBarBehavior.floating,
             ),
           );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Lỗi khi đọc file: $e'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _pickFileFromDevice() async {
-    try {
-      final picked = await NativeFilePicker.pickFile();
-      if (picked != null) {
-        final content = picked['content'] ?? '';
-        final fileName = picked['name'] ?? 'tệp sao lưu';
-        if (content.trim().isEmpty) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('File đã chọn không có nội dung!'),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-          return;
-        }
-
-        final imported = BackupService.parseUniversal(content);
-        if (imported.isNotEmpty) {
-          for (final item in imported) {
-            await widget.storageService.addCredential(item);
-          }
-          _loadData();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Row(
-                  children: [
-                    const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text('Đã nạp thành công ${imported.length} tài khoản từ "$fileName"!'),
-                    ),
-                  ],
-                ),
-                backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Không tìm thấy tài khoản hợp lệ trong file đã chọn!'),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
         }
       }
     } catch (e) {
@@ -1426,7 +1389,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Bộ Chọn File Hệ Thống',
+                    'Trình Chọn File Hệ Thống',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -1441,7 +1404,7 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Không thể khởi động trình duyệt file hệ thống: ${e.toString()}',
+                  'Không thể khởi động trình duyệt file: ${e.toString()}',
                   style: TextStyle(
                     fontSize: 13,
                     color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569),
@@ -1456,7 +1419,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     border: Border.all(color: const Color(0xFF0284C7).withOpacity(0.3)),
                   ),
                   child: const Text(
-                    'Bạn có thể chọn "Dán Từ Clipboard" để nạp ngay mà không cần quyền hệ thống, hoặc bấm "Duyệt Thư Mục Máy" để quét các file có sẵn!',
+                    'Khắc phục: Đảm bảo pubspec.yaml có "file_picker: ^8.1.7" và chạy "flutter pub get" trước khi build.',
                     style: TextStyle(fontSize: 11, color: Color(0xFF38BDF8)),
                   ),
                 ),
@@ -1467,24 +1430,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 onPressed: () => Navigator.pop(dialogCtx),
                 child: const Text('Đóng'),
               ),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.paste, size: 14),
-                label: const Text('Dán Clipboard'),
-                onPressed: () {
-                  Navigator.pop(dialogCtx);
-                  _showImportDialog();
-                },
-              ),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF0284C7),
                   foregroundColor: Colors.white,
                 ),
-                icon: const Icon(Icons.folder_shared, size: 16),
-                label: const Text('Duyệt Thư Mục Máy'),
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Thử Lại'),
                 onPressed: () {
                   Navigator.pop(dialogCtx);
-                  _openFolderExplorer();
+                  _pickFileFromDevice();
                 },
               ),
             ],
@@ -1492,1047 +1447,6 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }
     }
-  }
-
-  Future<void> _openFolderExplorer() async {
-    final List<Map<String, dynamic>> rootDirs = [];
-    final List<File> discoveredBackups = [];
-    Directory? initialDir;
-
-    // 1. Quét tệp sao lưu từ MethodChannel native (nếu có quyền đọc thư mục Download máy)
-    final List<Map<String, String>> nativeDownloads = await NativeFilePicker.listPublicDownloads();
-
-    try {
-      final appDocDir = await getApplicationDocumentsDirectory();
-      final backupDir = Directory('${appDocDir.path}/PassLock_Backups');
-      if (!await backupDir.exists()) {
-        await backupDir.create(recursive: true);
-      }
-      rootDirs.add({
-        "title": "⭐ Sao Lưu PassLock",
-        "dir": backupDir,
-        "badge": "An Toàn 100%",
-      });
-      rootDirs.add({
-        "title": "📂 Tài Liệu App",
-        "dir": appDocDir,
-        "badge": "Nội Bộ",
-      });
-      initialDir = backupDir;
-
-      for (final d in [backupDir, appDocDir]) {
-        if (d.existsSync()) {
-          for (final f in d.listSync()) {
-            if (f is File) {
-              final lower = f.path.toLowerCase();
-              if (lower.endsWith(".csv") || lower.endsWith(".txt") || lower.endsWith(".json")) {
-                discoveredBackups.add(f);
-              }
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    try {
-      final tempDir = await getTemporaryDirectory();
-      if (tempDir.existsSync()) {
-        for (final f in tempDir.listSync()) {
-          if (f is File && f.path.contains("passlock_backup")) {
-            if (!discoveredBackups.any((b) => b.path == f.path)) {
-              discoveredBackups.add(f);
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    try {
-      final extDir = await getExternalStorageDirectory();
-      if (extDir != null) {
-        rootDirs.add({
-          "title": "💾 Bộ Nhớ Ngoài",
-          "dir": extDir,
-          "badge": "SD",
-        });
-        if (extDir.existsSync()) {
-          for (final f in extDir.listSync()) {
-            if (f is File) {
-              final lower = f.path.toLowerCase();
-              if (lower.endsWith(".csv") || lower.endsWith(".txt") || lower.endsWith(".json")) {
-                if (!discoveredBackups.any((b) => b.path == f.path)) {
-                  discoveredBackups.add(f);
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    final dlDir = Directory("/storage/emulated/0/Download");
-    rootDirs.add({
-      "title": "📥 Tải Về (Download)",
-      "dir": dlDir,
-      "badge": "Máy",
-    });
-
-    Directory currentDir = initialDir ?? dlDir;
-
-    // Tổng hợp tất cả tệp sao lưu tìm thấy từ nội bộ và mục Download
-    final List<Map<String, dynamic>> allDiscovered = [];
-    for (final f in discoveredBackups) {
-      allDiscovered.add({
-        "name": f.path.split("/").last,
-        "path": f.path,
-        "isNative": false,
-        "file": f,
-      });
-    }
-    for (final nd in nativeDownloads) {
-      final nName = nd["name"] ?? "";
-      if (nName.isNotEmpty && !allDiscovered.any((d) => d["name"] == nName)) {
-        allDiscovered.add({
-          "name": nName,
-          "path": nd["path"] ?? "",
-          "isNative": true,
-          "file": null,
-        });
-      }
-    }
-
-    if (!mounted) return;
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setExplorerState) {
-          List<FileSystemEntity> entities = [];
-          String? readError;
-          try {
-            if (currentDir.existsSync()) {
-              entities = currentDir.listSync();
-              entities.sort((a, b) {
-                final aIsDir = a is Directory;
-                final bIsDir = b is Directory;
-                if (aIsDir && !bIsDir) return -1;
-                if (!aIsDir && bIsDir) return 1;
-                return a.path.toLowerCase().compareTo(b.path.toLowerCase());
-              });
-            } else {
-              readError = "Thư mục không tồn tại hoặc chưa tạo.";
-            }
-          } catch (e) {
-            readError = "Android Scoped Storage giới hạn đọc danh mục trực tiếp của thư mục này.";
-          }
-
-          final isDownloadFolder = currentDir.path.toLowerCase().contains("download");
-          final parentDir = currentDir.parent;
-          final canGoUp = currentDir.path != "/" && currentDir.path != parentDir.path;
-
-          return Container(
-            height: MediaQuery.of(context).size.height * 0.85,
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Icon(Icons.folder_shared_outlined, color: Color(0xFF0284C7), size: 22),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        "Duyệt Cây Thư Mục Thiết Bị",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: () => Navigator.pop(ctx),
-                      color: _isDarkMode ? const Color(0xFF94A3B8) : Colors.grey,
-                    ),
-                  ],
-                ),
-
-                // Thanh phím tắt tiện ích: Bộ chọn file máy (SAF) + Dán Clipboard
-                Padding(
-                  padding: const EdgeInsets.only(top: 4, bottom: 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                            side: BorderSide(color: const Color(0xFF0284C7).withOpacity(0.5)),
-                          ),
-                          icon: const Icon(Icons.file_open, size: 14, color: Color(0xFF38BDF8)),
-                          label: const Text("Bộ Chọn File Máy (SAF)", style: TextStyle(fontSize: 11, color: Color(0xFF38BDF8))),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _pickFileFromDevice();
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                            side: BorderSide(color: Colors.purple.withOpacity(0.5)),
-                          ),
-                          icon: const Icon(Icons.paste, size: 14, color: Colors.purpleAccent),
-                          label: const Text("Dán Clipboard", style: TextStyle(fontSize: 11, color: Colors.purpleAccent)),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _showImportDialog();
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Danh sách tệp sao lưu đã phát hiện sẵn trên máy & trong Download (nếu có)
-                if (allDiscovered.isNotEmpty) ...[
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0284C7).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF0284C7).withOpacity(0.25)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF38BDF8)),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Tệp sao lưu sẵn sàng (${allDiscovered.length}):',
-                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: allDiscovered.map((bf) {
-                              final bName = bf["name"] as String;
-                              final isNat = bf["isNative"] as bool;
-                              return Padding(
-                                padding: const EdgeInsets.only(right: 6),
-                                child: ActionChip(
-                                  avatar: Icon(
-                                    isNat ? Icons.download_rounded : Icons.file_present,
-                                    size: 14,
-                                    color: Colors.white,
-                                  ),
-                                  backgroundColor: const Color(0xFF0284C7),
-                                  label: Text(
-                                    bName.length > 25 ? '${bName.substring(0, 22)}...' : bName,
-                                    style: const TextStyle(fontSize: 11, color: Colors.white),
-                                  ),
-                                  onPressed: () async {
-                                    Navigator.pop(ctx);
-                                    if (isNat) {
-                                      final res = await NativeFilePicker.readFileByPath(bf["path"] as String);
-                                      if (res != null && res["content"] != null) {
-                                        final imported = BackupService.parseUniversal(res["content"]!);
-                                        if (imported.isNotEmpty) {
-                                          for (final it in imported) {
-                                            await widget.storageService.addCredential(it);
-                                          }
-                                          _loadData();
-                                          if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Row(
-                                                  children: [
-                                                    const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
-                                                    const SizedBox(width: 8),
-                                                    Expanded(child: Text('Đã nạp thành công ${imported.length} tài khoản từ "${bName}"!')),
-                                                  ],
-                                                ),
-                                                backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
-                                                behavior: SnackBarBehavior.floating,
-                                              ),
-                                            );
-                                          }
-                                        }
-                                      }
-                                    } else {
-                                      _importFromFile(bf["file"] as File);
-                                    }
-                                  },
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
-                // Lựa chọn nhanh các thư mục chính (Quick Folder Tabs)
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: rootDirs.map((r) {
-                      final rDir = r["dir"] as Directory;
-                      final isSelected = currentDir.path.startsWith(rDir.path);
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: ChoiceChip(
-                          label: Text(r["title"] as String, style: const TextStyle(fontSize: 11)),
-                          selected: isSelected,
-                          onSelected: (_) {
-                            setExplorerState(() {
-                              currentDir = rDir;
-                            });
-                          },
-                          selectedColor: const Color(0xFF0284C7).withOpacity(0.3),
-                          backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                          labelStyle: TextStyle(
-                            color: isSelected
-                                ? const Color(0xFF38BDF8)
-                                : (_isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569)),
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                // Đường dẫn thư mục hiện tại & nút Lên thư mục cha
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      if (canGoUp)
-                        InkWell(
-                          onTap: () {
-                            setExplorerState(() {
-                              currentDir = parentDir;
-                            });
-                          },
-                          child: const Padding(
-                            padding: EdgeInsets.only(right: 6),
-                            child: Icon(Icons.arrow_upward, size: 16, color: Color(0xFF0284C7)),
-                          ),
-                        ),
-                      Expanded(
-                        child: Text(
-                          currentDir.path,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontFamily: "monospace",
-                            color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0369A1),
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (readError != null)
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.folder_special_rounded, size: 40, color: Color(0xFF0284C7)),
-                            const SizedBox(height: 10),
-                            Text(
-                              isDownloadFolder ? "Thư Mục Tải Về (Download)" : readError!,
-                              style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 14, fontWeight: FontWeight.bold),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              "Trên Android 10+, tính năng Scoped Storage bảo vệ thư mục này. PassLock hỗ trợ mở Bộ Chọn File Hệ Thống để chọn trực tiếp bất kỳ tệp nào trong Download, Thẻ nhớ SD hoặc Google Drive:",
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 14),
-                            ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF0284C7),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                              ),
-                              icon: const Icon(Icons.file_open, size: 18),
-                              label: const Text("Mở Bộ Chọn Tệp Hệ Thống (SAF)"),
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                                _pickFileFromDevice();
-                              },
-                            ),
-                            const SizedBox(height: 8),
-                            OutlinedButton.icon(
-                              icon: const Icon(Icons.paste, size: 16, color: Colors.purpleAccent),
-                              label: const Text("Dán Dữ Liệu Từ Clipboard", style: TextStyle(color: Colors.purpleAccent)),
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                                _showImportDialog();
-                              },
-                            ),
-                            if (rootDirs.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              TextButton.icon(
-                                icon: const Icon(Icons.star_rounded, size: 16, color: Color(0xFF38BDF8)),
-                                label: const Text("Về Thư Mục Sao Lưu PassLock"),
-                                onPressed: () {
-                                  setExplorerState(() {
-                                    currentDir = rootDirs.first["dir"] as Directory;
-                                  });
-                                },
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  )
-                else
-                  Expanded(
-                    child: entities.isEmpty
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(20),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.folder_open, size: 44, color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade400),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    "Thư mục hiện tại chưa có file",
-                                    style: TextStyle(
-                                      color: _isDarkMode ? const Color(0xFF94A3B8) : Colors.grey.shade600,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    "Bạn có thể dùng Bộ Chọn File Hệ Thống để tìm file trong Download, Drive hoặc Thẻ nhớ.",
-                                    style: TextStyle(
-                                      color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
-                                      fontSize: 11,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF0284C7),
-                                      foregroundColor: Colors.white,
-                                    ),
-                                    icon: const Icon(Icons.file_open, size: 16),
-                                    label: const Text("Mở Bộ Chọn Tệp Máy"),
-                                    onPressed: () {
-                                      Navigator.pop(ctx);
-                                      _pickFileFromDevice();
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: entities.length,
-                            separatorBuilder: (_, __) => Divider(
-                              height: 1,
-                              color: _isDarkMode ? const Color(0xFF1E293B) : Colors.grey.shade200,
-                            ),
-                            itemBuilder: (context, index) {
-                              final item = entities[index];
-                              final isDir = item is Directory;
-                              final name = item.path.split("/").last;
-                              final lower = name.toLowerCase();
-                              final isSupportedFile = !isDir &&
-                                  (lower.endsWith(".csv") ||
-                                      lower.endsWith(".txt") ||
-                                      lower.endsWith(".json") ||
-                                      lower.endsWith(".tsv") ||
-                                      lower.endsWith(".bak") ||
-                                      lower.endsWith(".dat"));
-
-                              String fileSizeStr = "";
-                              if (!isDir && item is File) {
-                                try {
-                                  final bytes = item.lengthSync();
-                                  fileSizeStr = bytes > 1024
-                                      ? '${(bytes / 1024).toStringAsFixed(1)} KB'
-                                      : '${bytes} B';
-                                } catch (_) {}
-                              }
-
-                              return ListTile(
-                                dense: true,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                                leading: Icon(
-                                  isDir
-                                      ? Icons.folder
-                                      : isSupportedFile
-                                          ? (lower.endsWith(".csv")
-                                              ? Icons.table_chart_outlined
-                                              : lower.endsWith(".json")
-                                                  ? Icons.code_rounded
-                                                  : Icons.description_outlined)
-                                          : Icons.insert_drive_file_outlined,
-                                  color: isDir
-                                      ? const Color(0xFFF59E0B)
-                                      : isSupportedFile
-                                          ? (lower.endsWith(".csv")
-                                              ? Colors.green
-                                              : lower.endsWith(".json")
-                                                  ? Colors.cyan
-                                                  : Colors.blue)
-                                          : Colors.grey,
-                                  size: 22,
-                                ),
-                                title: Text(
-                                  name,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: isSupportedFile || isDir ? FontWeight.w600 : FontWeight.normal,
-                                    color: isSupportedFile
-                                        ? (_isDarkMode ? Colors.white : const Color(0xFF0F172A))
-                                        : (isDir
-                                            ? (_isDarkMode ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B))
-                                            : (_isDarkMode ? const Color(0xFF64748B) : Colors.grey)),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                subtitle: fileSizeStr.isNotEmpty
-                                    ? Text(
-                                        fileSizeStr,
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
-                                        ),
-                                      )
-                                    : null,
-                                trailing: !isDir
-                                    ? ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: isSupportedFile ? const Color(0xFF0284C7) : const Color(0xFF475569),
-                                          foregroundColor: Colors.white,
-                                          minimumSize: const Size(54, 28),
-                                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                                        ),
-                                        onPressed: () {
-                                          Navigator.pop(ctx);
-                                          _importFromFile(File(item.path));
-                                        },
-                                        child: Text(isSupportedFile ? "Nạp" : "Chọn", style: const TextStyle(fontSize: 11)),
-                                      )
-                                    : const Icon(Icons.chevron_right, size: 18, color: Colors.grey),
-                                onTap: () {
-                                  if (isDir) {
-                                    setExplorerState(() {
-                                      currentDir = item;
-                                    });
-                                  } else {
-                                    Navigator.pop(ctx);
-                                    _importFromFile(File(item.path));
-                                  }
-                                },
-                              );
-                            },
-                          ),
-                  ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Future<void> _openFileImportDialog() async {
-    final List<File> foundFiles = [];
-    final List<Directory> scanDirs = [];
-
-    // 1. Quét tìm qua MethodChannel native từ mục Downloads của máy
-    final List<Map<String, String>> nativeDownloads = await NativeFilePicker.listPublicDownloads();
-
-    try {
-      final appDocDir = await getApplicationDocumentsDirectory();
-      final backupDir = Directory('${appDocDir.path}/PassLock_Backups');
-      if (await backupDir.exists()) {
-        scanDirs.add(backupDir);
-      }
-      scanDirs.add(appDocDir);
-    } catch (_) {}
-
-    try {
-      final extDir = await getExternalStorageDirectory();
-      if (extDir != null && await extDir.exists()) {
-        scanDirs.add(extDir);
-      }
-    } catch (_) {}
-
-    scanDirs.addAll([
-      Directory("/storage/emulated/0/Download"),
-      Directory("/sdcard/Download"),
-      Directory("/storage/emulated/0/Documents"),
-    ]);
-
-    for (final dir in scanDirs) {
-      if (await dir.exists()) {
-        try {
-          final list = dir.listSync();
-          for (final item in list) {
-            if (item is File) {
-              final pathLower = item.path.toLowerCase();
-              if (pathLower.endsWith(".csv") || pathLower.endsWith(".txt") || pathLower.endsWith(".json")) {
-                if (!foundFiles.any((f) => f.path == item.path)) {
-                  foundFiles.add(item);
-                }
-              }
-            }
-          }
-        } catch (_) {}
-      }
-    }
-
-    foundFiles.sort((a, b) {
-      try {
-        return b.lastModifiedSync().compareTo(a.lastModifiedSync());
-      } catch (_) {
-        return 0;
-      }
-    });
-
-    // Kết hợp cả tệp từ thư mục app lẫn tệp quét từ mục Downloads máy
-    final List<Map<String, dynamic>> allCandidates = [];
-    for (final f in foundFiles) {
-      allCandidates.add({
-        "name": f.path.split("/").last,
-        "path": f.path,
-        "isNative": false,
-        "file": f,
-      });
-    }
-    for (final nd in nativeDownloads) {
-      final nName = nd["name"] ?? "";
-      if (nName.isNotEmpty && !allCandidates.any((c) => c["name"] == nName)) {
-        allCandidates.add({
-          "name": nName,
-          "path": nd["path"] ?? "",
-          "isNative": true,
-          "file": null,
-        });
-      }
-    }
-
-    if (!mounted) return;
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          top: 20,
-          left: 20,
-          right: 20,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                "Nhập Dữ Liệu Từ File",
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                "Duyệt và chọn file sao lưu (.csv, .txt, .json) có sẵn trên máy để nạp dữ liệu:",
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // ============================================================
-              // NÚT 1 (HERO ACTION): DUYỆT FILE HỆ THỐNG GỐC ANDROID (SAF)
-              // ============================================================
-              InkWell(
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _pickFileFromDevice();
-                },
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: _isDarkMode
-                        ? const Color(0xFF0284C7).withOpacity(0.18)
-                        : const Color(0xFFE0F2FE),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _isDarkMode ? const Color(0xFF0284C7) : const Color(0xFF38BDF8),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0284C7),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(
-                          Icons.file_open_rounded,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Text(
-                                  "Duyệt file trên thiết bị",
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                    color: _isDarkMode ? Colors.white : const Color(0xFF0369A1),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF0284C7),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: const Text(
-                                    "Khuyên Dùng",
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              "Mở bộ chọn file máy (Tải về, Thẻ nhớ SD, Google Drive) để chọn .csv, .txt, .json",
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF0C4A6E),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Color(0xFF0284C7)),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              // ============================================================
-              // NÚT 2: DÁN NỘI DUNG TỪ CLIPBOARD (NHANH NHẤT & KHÔNG CẦN QUYỀN)
-              // ============================================================
-              InkWell(
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _showImportDialog();
-                },
-                borderRadius: BorderRadius.circular(14),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? const Color(0xFF9333EA).withOpacity(0.12) : const Color(0xFFFAF5FF),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: _isDarkMode ? const Color(0xFF9333EA).withOpacity(0.4) : const Color(0xFFE9D5FF),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.paste_rounded,
-                          color: _isDarkMode ? const Color(0xFFC084FC) : const Color(0xFF9333EA),
-                          size: 20),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              "Dán nội dung từ Clipboard",
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: _isDarkMode ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
-                              ),
-                            ),
-                            Text(
-                              "Nạp tức thì 100% không lo bị chặn quyền",
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF7E22CE),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Icon(Icons.chevron_right,
-                          color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey.shade400,
-                          size: 18),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              // ============================================================
-              // NÚT 3: TRÌNH DUYỆT THƯ MỤC NỘI BỘ (IN-APP FOLDER EXPLORER)
-              // ============================================================
-              InkWell(
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _openFolderExplorer();
-                },
-                borderRadius: BorderRadius.circular(14),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.folder_shared_outlined,
-                          color: _isDarkMode ? const Color(0xFFF59E0B) : const Color(0xFFD97706),
-                          size: 20),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          "Duyệt cây thư mục trên máy (File Explorer)",
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: _isDarkMode ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
-                          ),
-                        ),
-                      ),
-                      Icon(Icons.chevron_right,
-                          color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey.shade400,
-                          size: 18),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 14),
-
-              // ============================================================
-              // DANH SÁCH FILE SAO LƯU QUÉT TỰ ĐỘNG
-              // ============================================================
-              if (allCandidates.isNotEmpty) ...[
-                Row(
-                  children: [
-                    Text(
-                      'File sao lưu tìm thấy trên máy (${allCandidates.length}):',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  constraints: const BoxConstraints(maxHeight: 180),
-                  decoration: BoxDecoration(
-                    color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200),
-                  ),
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: allCandidates.length,
-                    separatorBuilder: (_, __) => Divider(
-                      height: 1,
-                      color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200,
-                    ),
-                    itemBuilder: (context, idx) {
-                      final item = allCandidates[idx];
-                      final name = item["name"] as String;
-                      final isNat = item["isNative"] as bool;
-                      final isCsv = name.toLowerCase().endsWith(".csv");
-                      final isJson = name.toLowerCase().endsWith(".json");
-                      return ListTile(
-                        dense: true,
-                        leading: Icon(
-                          isCsv
-                              ? Icons.table_chart_outlined
-                              : isJson
-                                  ? Icons.code_rounded
-                                  : Icons.description_outlined,
-                          color: isCsv
-                              ? Colors.green
-                              : isJson
-                                  ? Colors.cyan
-                                  : Colors.blue,
-                          size: 20,
-                        ),
-                        title: Text(
-                          name,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                              decoration: BoxDecoration(
-                                color: isNat ? Colors.amber.withOpacity(0.2) : Colors.blue.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                isNat ? "Tải Về (Download)" : "Sao Lưu PassLock",
-                                style: TextStyle(
-                                  fontSize: 9,
-                                  color: isNat ? Colors.amber : const Color(0xFF38BDF8),
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        trailing: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0284C7),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            minimumSize: const Size(50, 28),
-                          ),
-                          onPressed: () async {
-                            Navigator.pop(ctx);
-                            if (isNat) {
-                              final res = await NativeFilePicker.readFileByPath(item["path"] as String);
-                              if (res != null && res["content"] != null) {
-                                final imported = BackupService.parseUniversal(res["content"]!);
-                                if (imported.isNotEmpty) {
-                                  for (final it in imported) {
-                                    await widget.storageService.addCredential(it);
-                                  }
-                                  _loadData();
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Row(
-                                          children: [
-                                            const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
-                                            const SizedBox(width: 8),
-                                            Expanded(child: Text('Đã nạp thành công ${imported.length} tài khoản từ "${name}"!')),
-                                          ],
-                                        ),
-                                        backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
-                                        behavior: SnackBarBehavior.floating,
-                                      ),
-                                    );
-                                  }
-                                }
-                              }
-                            } else {
-                              _importFromFile(item["file"] as File);
-                            }
-                          },
-                          child: const Text("Nạp", style: TextStyle(fontSize: 11)),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   Future<void> _openBackupDialog() async {
@@ -2560,7 +1474,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Sao Lưu & Xuất/Nhập Dữ Liệu',
+              'Sao Lưu & Khôi Phục Dữ Liệu',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -2569,7 +1483,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Xuất file cất giữ an toàn hoặc nhập file đã sao lưu để khôi phục tài khoản:',
+              'Chọn file sao lưu để nạp lại hoặc xuất file bảo mật cất giữ an toàn:',
               style: TextStyle(
                 fontSize: 12,
                 color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
@@ -2577,7 +1491,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
 
-            // 1. Nhập từ file trên máy
+            // 1. Nhập file bằng app duyệt file
             ListTile(
               leading: CircleAvatar(
                 backgroundColor: _isDarkMode ? const Color(0xFF0284C7).withOpacity(0.2) : const Color(0xFFE0F2FE),
@@ -2587,7 +1501,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               title: Text(
-                'Duyệt & Nhập file từ thiết bị (.csv, .txt, .json)',
+                'Nhập file sao lưu từ thiết bị (.csv, .txt, .json)',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
@@ -2595,7 +1509,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               subtitle: Text(
-                'Duyệt chọn file sao lưu trong máy hoặc Google Drive để nạp lại tài khoản',
+                'Mở app duyệt file của máy (Tệp, Downloads, Google Drive, Thẻ nhớ SD...) để chọn file nạp lại',
                 style: TextStyle(
                   fontSize: 12,
                   color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
@@ -2603,7 +1517,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               onTap: () {
                 Navigator.pop(ctx);
-                _openFileImportDialog();
+                _pickFileFromDevice();
               },
             ),
             Divider(color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0)),
@@ -2696,195 +1610,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pop(ctx);
                 BackupService.exportAndShare(context: context, items: _credentials, format: 'json');
               },
-            ),
-            Divider(color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0)),
-
-            // 5. Dán dữ liệu từ văn bản / bộ nhớ tạm
-            ListTile(
-              leading: CircleAvatar(
-                backgroundColor: _isDarkMode ? const Color(0xFF9333EA).withOpacity(0.2) : const Color(0xFFF3E8FF),
-                child: Icon(
-                  Icons.content_paste_rounded,
-                  color: _isDarkMode ? const Color(0xFFC084FC) : const Color(0xFF9333EA),
-                ),
-              ),
-              title: Text(
-                'Dán nội dung khôi phục (Clipboard / Dán tay)',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
-                ),
-              ),
-              subtitle: Text(
-                'Dán nội dung từ file .csv, .txt hoặc .json đã copy trước đó',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                ),
-              ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showImportDialog();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showImportDialog() async {
-    final textController = TextEditingController();
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) => AlertDialog(
-          backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Text(
-            'Khôi phục dữ liệu',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
-              color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
-            ),
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Chọn file từ máy hoặc dán nội dung file sao lưu để phục hồi:',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                          foregroundColor: _isDarkMode ? const Color(0xFF38BDF8) : const Color(0xFF0F172A),
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                        ),
-                        icon: const Icon(Icons.file_open_rounded, size: 16),
-                        label: const Text('Mở file máy', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _openFileImportDialog();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                          foregroundColor: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                        ),
-                        icon: const Icon(Icons.paste_rounded, size: 16),
-                        label: const Text('Dán Clipboard', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                        onPressed: () async {
-                          final data = await Clipboard.getData(Clipboard.kTextPlain);
-                          if (data != null && data.text != null) {
-                            setModalState(() {
-                              textController.text = data.text!;
-                            });
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: textController,
-                  maxLines: 5,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'Dán nội dung file sao lưu vào đây...',
-                    hintStyle: TextStyle(
-                      fontSize: 12,
-                      color: _isDarkMode ? const Color(0xFF64748B) : Colors.grey,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade200),
-                    ),
-                    filled: true,
-                    fillColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(
-                'Hủy',
-                style: TextStyle(color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-              ),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isDarkMode ? const Color(0xFF0284C7) : const Color(0xFF0F172A),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              onPressed: () async {
-                final content = textController.text.trim();
-                if (content.isEmpty) return;
-                Navigator.pop(ctx);
-                final imported = BackupService.parseUniversal(content);
-                if (imported.isNotEmpty) {
-                  for (final item in imported) {
-                    await widget.storageService.addCredential(item);
-                  }
-                  _loadData();
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Row(
-                          children: [
-                            const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 18),
-                            const SizedBox(width: 8),
-                            Text('Đã phục hồi thành công ${imported.length} tài khoản!'),
-                          ],
-                        ),
-                        backgroundColor: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFF0F172A),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
-                } else {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Không tìm thấy dữ liệu hợp lệ để phục hồi!'),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
-                }
-              },
-              child: const Text('Khôi phục ngay'),
             ),
           ],
         ),
