@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # Cho phép bấm nút "Run workflow" trực tiếp trên GitHub Actions
+  workflow_dispatch: # Cho phép bấm nút "Run workflow" trực tiếp trên GitHub
 
 jobs:
   build:
@@ -39,7 +39,7 @@ jobs:
             flutter create . --platforms=android --org=com.example
           fi
 
-      # 5. Cài đặt các thư viện phụ thuộc (bao gồm file_picker: ^8.1.7)
+      # 5. Cài đặt các thư viện phụ thuộc
       - name: Install dependencies
         run: |
           flutter pub add flutter_secure_storage:^9.2.2 share_plus:^10.1.2 path_provider:^2.1.5 cupertino_icons:^1.0.8 uuid:^4.4.0 file_picker:^8.1.7 || true
@@ -52,24 +52,17 @@ jobs:
             chmod +x android/gradlew
           fi
 
-      # 7. Khắc phục triệt để compileSdk 36 & vô hiệu hóa hoàn toàn checkAarMetadata cho plugins
-      - name: Fix compileSdk 36 & Bypass AarMetadata
+      # 7. Khắc phục triệt để compileSdk 36 cho toàn bộ plugins (file_picker, share_plus...)
+      - name: Force compileSdk 36 for All Plugins
         run: |
           mkdir -p android
           echo "android.suppressUnsupportedCompileSdk=36" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # A. Tạo init script trong ~/.gradle/init.d/ để tắt mọi AarMetadata task trong Gradle
+          # A. Tạo init script trong ~/.gradle/init.d/ để ép compileSdk 36 cho toàn bộ dự án
           mkdir -p ~/.gradle/init.d
-          cat << 'EOF' > ~/.gradle/init.d/bypass-aar.gradle
-          gradle.taskGraph.whenReady { taskGraph ->
-              taskGraph.allTasks.each { task ->
-                  if (task.name.toLowerCase().contains("aarmetadata")) {
-                      task.enabled = false
-                  }
-              }
-          }
+          cat << 'EOF' > ~/.gradle/init.d/force-compile-sdk.gradle
           allprojects {
               afterEvaluate { project ->
                   if (project.hasProperty("android")) {
@@ -80,7 +73,7 @@ jobs:
           }
           EOF
 
-          # B. Quét và nâng compileSdk 36 trực tiếp trong cache plugin (file_picker, share_plus...)
+          # B. Quét và vá compileSdk 36 trực tiếp trong cache plugin (file_picker, share_plus...)
           find "$HOME/.pub-cache" /home/runner/.pub-cache /root/.pub-cache -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) 2>/dev/null | while read -r f; do
             sed -i -E 's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 36/g' "$f" || true
             sed -i -E 's/compileSdk[[:space:]]+[0-9]+/compileSdk 36/g' "$f" || true
@@ -105,7 +98,7 @@ jobs:
             sed -i -E 's/minSdk[[:space:]]*=.*/minSdk = 23/g' android/app/build.gradle.kts || true
           fi
 
-          # D. Chèn cấu hình bypass AarMetadata vào android/build.gradle nếu có
+          # D. Chèn cấu hình ép compileSdkVersion 36 vào android/build.gradle nếu có
           if [ -f "android/build.gradle" ]; then
             cat << 'EOF' >> android/build.gradle
 
@@ -114,13 +107,6 @@ jobs:
                   if (project.hasProperty('android')) {
                       try { project.android.compileSdkVersion 36 } catch (Exception e) {}
                       try { project.android.compileSdk = 36 } catch (Exception e) {}
-                  }
-              }
-          }
-          gradle.taskGraph.whenReady { taskGraph ->
-              taskGraph.allTasks.each { task ->
-                  if (task.name.toLowerCase().contains("aarmetadata")) {
-                      task.enabled = false
                   }
               }
           }
