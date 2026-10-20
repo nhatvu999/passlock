@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
 
 // ============================================================================
 // 1. MODEL DỮ LIỆU TÀI KHOẢN (ACCOUNT CREDENTIAL MODEL)
@@ -765,7 +766,7 @@ class _PasscodeScreenState extends State<PasscodeScreen>
 }
 
 // ============================================================================
-// 4B. TRÌNH CHỌN FILE HỆ THỐNG GỐC ANDROID (NATIVE SAF FILE PICKER)
+// 4B. TRÌNH CHỌN FILE HỆ THỐNG GỐC ANDROID (NATIVE SAF FILE PICKER DỰ PHÒNG)
 // ============================================================================
 class NativeFilePicker {
   static const MethodChannel _channel = MethodChannel('com.example.passlock/file_picker');
@@ -782,45 +783,12 @@ class NativeFilePicker {
       }
       return null;
     } on MissingPluginException {
-      throw 'Dự án Android chưa liên kết MainActivity.kt (MethodChannel chưa khả dụng).';
+      throw 'Dự án Android chưa liên kết MainActivity.kt (MethodChannel chưa khả dụng). Vui lòng thêm file_picker: ^8.1.7 vào pubspec.yaml và chạy flutter pub get.';
     } on PlatformException catch (pe) {
       throw 'Không thể mở bộ chọn file hệ thống: ${pe.message ?? pe.code}';
     } catch (e) {
       throw 'Lỗi gọi trình chọn tệp: $e';
     }
-  }
-
-  static Future<List<Map<String, String>>> listPublicDownloads() async {
-    try {
-      final res = await _channel.invokeMethod<dynamic>('listDownloads');
-      if (res is List) {
-        final list = <Map<String, String>>[];
-        for (final item in res) {
-          if (item is Map) {
-            list.add({
-              'name': item['name']?.toString() ?? '',
-              'path': item['path']?.toString() ?? '',
-              'size': item['size']?.toString() ?? '',
-            });
-          }
-        }
-        return list;
-      }
-    } catch (_) {}
-    return [];
-  }
-
-  static Future<Map<String, String>?> readFileByPath(String path) async {
-    try {
-      final res = await _channel.invokeMethod<dynamic>('readFileByPath', {'path': path});
-      if (res is Map) {
-        return {
-          'name': res['name']?.toString() ?? '',
-          'content': res['content']?.toString() ?? '',
-        };
-      }
-    } catch (_) {}
-    return null;
   }
 }
 
@@ -1284,20 +1252,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _pickFileFromDevice() async {
     try {
-      final picked = await NativeFilePicker.pickFile();
+      String? fileContent;
+      String? fileName;
 
-      // Người dùng hủy hoặc đóng trình chọn tệp
-      if (picked == null) {
-        return;
+      // 1. Thử dùng thư viện chuẩn file_picker (file_picker: ^8.1.7)
+      try {
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['csv', 'txt', 'json'],
+          withData: true,
+        );
+
+        if (result == null || result.files.isEmpty) {
+          // Người dùng chủ động hủy hoặc đóng trình chọn tệp
+          return;
+        }
+
+        final file = result.files.first;
+        fileName = file.name;
+
+        if (file.bytes != null) {
+          fileContent = utf8.decode(file.bytes!, allowMalformed: true);
+        } else if (file.path != null) {
+          final ioFile = File(file.path!);
+          if (await ioFile.exists()) {
+            fileContent = await ioFile.readAsString();
+          }
+        }
+      } catch (pickerErr) {
+        // 2. Dự phòng: Thử qua Native SAF MethodChannel nếu cần
+        final picked = await NativeFilePicker.pickFile();
+        if (picked == null) {
+          return;
+        }
+        fileName = picked['name'];
+        fileContent = picked['content'];
       }
 
-      final content = picked['content'] ?? '';
-      final fileName = picked['name'] ?? 'tệp sao lưu';
-      if (content == null || content.trim().isEmpty) {
+      if (fileContent == null || fileContent.trim().isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('File "${fileName ?? "đã chọn"}" không có nội dung!'),
+              content: Text('File "${fileName ?? "đã chọn"}" trống hoặc không có nội dung hợp lệ!'),
               behavior: SnackBarBehavior.floating,
             ),
           );
@@ -1305,7 +1301,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final imported = BackupService.parseUniversal(content);
+      final imported = BackupService.parseUniversal(fileContent);
       if (imported.isNotEmpty) {
         for (final item in imported) {
           await widget.storageService.addCredential(item);
@@ -1347,11 +1343,11 @@ class _HomeScreenState extends State<HomeScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             title: Row(
               children: [
-                const Icon(Icons.folder_open_rounded, color: Color(0xFF0284C7), size: 24),
+                const Icon(Icons.error_outline_rounded, color: Colors.amber, size: 24),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Trình Chọn File Hệ Thống',
+                    'Không Thể Mở Trình Chọn File',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -1366,7 +1362,7 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Không thể khởi động trình duyệt file: ${e.toString()}',
+                  'Chi tiết lỗi: ${e.toString()}',
                   style: TextStyle(
                     fontSize: 13,
                     color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569),
@@ -1374,15 +1370,25 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 12),
                 Container(
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0284C7).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: const Color(0xFF0284C7).withOpacity(0.3)),
                   ),
-                  child: const Text(
-                    'Khắc phục: Đảm bảo pubspec.yaml có "file_picker: ^8.1.7" và chạy "flutter pub get" trước khi build.',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF38BDF8)),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Cách khắc phục khi tự build:',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        '1. Đảm bảo file pubspec.yaml có: file_picker: ^8.1.7\n2. Chạy lệnh "flutter pub get" trước khi gõ "flutter build apk".',
+                        style: TextStyle(fontSize: 11, color: Color(0xFFE2E8F0)),
+                      ),
+                    ],
                   ),
                 ),
               ],
