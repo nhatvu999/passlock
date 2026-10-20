@@ -7,7 +7,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:file_picker/file_picker.dart';
 
 // ============================================================================
 // 1. MODEL DỮ LIỆU TÀI KHOẢN (ACCOUNT CREDENTIAL MODEL)
@@ -1285,52 +1284,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _pickFileFromDevice() async {
     try {
-      String? content;
-      String? fileName;
-
-      // 1. Thử dùng FilePicker (Thư viện chuẩn Flutter, tự động liên kết plugin với Android không cần cấu hình MainActivity)
-      try {
-        final result = await FilePicker.platform.pickFiles(
-          type: FileType.custom,
-          allowedExtensions: ['csv', 'txt', 'json'],
-          withData: true,
-        );
-
-        if (result != null && result.files.isNotEmpty) {
-          final platformFile = result.files.single;
-          fileName = platformFile.name;
-          if (platformFile.bytes != null) {
-            content = utf8.decode(platformFile.bytes!, allowMalformed: true);
-          } else if (platformFile.path != null) {
-            final f = File(platformFile.path!);
-            if (await f.exists()) {
-              try {
-                content = await f.readAsString(encoding: utf8);
-              } catch (_) {
-                final bytes = await f.readAsBytes();
-                content = utf8.decode(bytes, allowMalformed: true);
-              }
-            }
-          }
-        }
-      } catch (fpErr) {
-        // 2. Dự phòng: gọi Native SAF qua MethodChannel nếu máy đã liên kết MainActivity
-        try {
-          final nativeRes = await NativeFilePicker.pickFile();
-          if (nativeRes != null) {
-            fileName = nativeRes['name'];
-            content = nativeRes['content'];
-          }
-        } catch (_) {
-          rethrow;
-        }
-      }
+      final picked = await NativeFilePicker.pickFile();
 
       // Người dùng hủy hoặc đóng trình chọn tệp
-      if (fileName == null && content == null) {
+      if (picked == null) {
         return;
       }
 
+      final content = picked['content'] ?? '';
+      final fileName = picked['name'] ?? 'tệp sao lưu';
       if (content == null || content.trim().isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
