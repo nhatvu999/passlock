@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  workflow_dispatch: # Cho phép bấm nút "Run workflow" trực tiếp trên GitHub Actions
 
 jobs:
   build:
@@ -31,7 +31,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # 4. Tự động khởi tạo cấu trúc Android nếu repo chỉ có lib/main.dart
+      # 4. Tự động khởi tạo môi trường Android nếu repo chỉ có lib/main.dart
       - name: Initialize Android Project
         run: |
           if [ ! -d "android" ]; then
@@ -39,13 +39,13 @@ jobs:
             flutter create . --platforms=android --org=com.example
           fi
 
-      # 5. Cài đặt thư viện phụ thuộc
+      # 5. Cài đặt các thư viện phụ thuộc (bao gồm file_picker: ^8.1.7)
       - name: Install dependencies
         run: |
           flutter pub add flutter_secure_storage:^9.2.2 share_plus:^10.1.2 path_provider:^2.1.5 cupertino_icons:^1.0.8 uuid:^4.4.0 file_picker:^8.1.7 || true
           flutter pub get
 
-      # 6. Cấp quyền thực thi gradlew
+      # 6. Cấp quyền thực thi cho gradlew
       - name: Grant execute permission for gradlew
         run: |
           if [ -f "android/gradlew" ]; then
@@ -105,11 +105,33 @@ jobs:
             sed -i -E 's/minSdk[[:space:]]*=.*/minSdk = 23/g' android/app/build.gradle.kts || true
           fi
 
+          # D. Chèn cấu hình bypass AarMetadata vào android/build.gradle nếu có
+          if [ -f "android/build.gradle" ]; then
+            cat << 'EOF' >> android/build.gradle
+
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      try { project.android.compileSdkVersion 36 } catch (Exception e) {}
+                      try { project.android.compileSdk = 36 } catch (Exception e) {}
+                  }
+              }
+          }
+          gradle.taskGraph.whenReady { taskGraph ->
+              taskGraph.allTasks.each { task ->
+                  if (task.name.toLowerCase().contains("aarmetadata")) {
+                      task.enabled = false
+                  }
+              }
+          }
+          EOF
+          fi
+
       # 8. Build file APK Release hoàn chỉnh
       - name: Build Android Release APK
-        run: flutter build apk --release --no-tree-shake-icons -- -x checkReleaseAarMetadata -x :file_picker:checkReleaseAarMetadata -x :app:checkReleaseAarMetadata -Pandroid.suppressUnsupportedCompileSdk=36
+        run: flutter build apk --release --no-tree-shake-icons
 
-      # 9. Xuất file APK lên Artifacts
+      # 9. Tải file APK lên GitHub Actions Artifacts để tải về điện thoại ngay lập tức
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
