@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  workflow_dispatch: # Cho phép bấm nút "Run workflow" trực tiếp trên GitHub
 
 jobs:
   build:
@@ -13,21 +13,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout mã nguồn repo
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # 2. Cài đặt Java JDK 17 với actions/setup-java@v5 (Khắc phục lỗi setup-java v4 deprecated)
       - name: Set up Java JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
+      # 3. Cài đặt Flutter SDK
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
+      # 4. Tự động khởi tạo môi trường Android nếu repo chỉ có lib/main.dart
       - name: Initialize Android Project
         run: |
           if [ ! -d "android" ]; then
@@ -35,43 +39,175 @@ jobs:
             flutter create . --platforms=android --org=com.example
           fi
 
-      - name: Configure Clean Dependencies
+      # 5. Tự động cấu hình MainActivity.kt tích hợp Trình Chọn File Hệ Thống (SAF)
+      - name: Inject Safe File Picker MainActivity
         run: |
-          if [ -f "pubspec.yaml" ]; then
-            sed -i '/file_picker/d' pubspec.yaml || true
-          fi
-          flutter pub remove file_picker 2>/dev/null || true
-          flutter pub add flutter_secure_storage:^9.2.2 share_plus:^10.1.2 path_provider:^2.1.5 cupertino_icons:^1.0.8 uuid:^4.4.0
+          mkdir -p android/app/src/main/kotlin/com/example/passlock
+          cat << 'EOF' > /tmp/MainActivity.kt.tpl
+package __PACKAGE_NAME__
+
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.provider.OpenableColumns
+import android.view.WindowManager
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity: FlutterActivity(), MethodChannel.MethodCallHandler {
+    private val CHANNEL = "com.example.passlock/file_picker"
+    private val REQUEST_CODE_PICK_FILE = 2026
+    private var pendingResult: MethodChannel.Result? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
+    }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "file_picker_channel").setMethodCallHandler(this)
+        try {
+            if (context.packageName.isNotEmpty()) {
+                MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "${context.packageName}/file_picker").setMethodCallHandler(this)
+            }
+        } catch (_: Exception) {}
+    }
+
+    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method == "pickFile") {
+            if (pendingResult != null) {
+                try { pendingResult?.error("CANCELLED", "Hủy thao tác trước", null) } catch (_: Exception) {}
+                pendingResult = null
+            }
+            pendingResult = result
+            try {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                }
+                try {
+                    startActivityForResult(intent, REQUEST_CODE_PICK_FILE)
+                } catch (_: Exception) {
+                    val getContent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                    }
+                    val chooser = Intent.createChooser(getContent, "Chọn file sao lưu (.csv, .txt, .json)")
+                    startActivityForResult(chooser, REQUEST_CODE_PICK_FILE)
+                }
+            } catch (e: Exception) {
+                pendingResult = null
+                result.error("INTENT_ERROR", "Không thể mở bộ chọn file: ${e.localizedMessage}", null)
+            }
+        } else {
+            result.notImplemented()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_PICK_FILE) {
+            val result = pendingResult ?: return
+            pendingResult = null
+
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                val uri: Uri? = data.data ?: (if (data.clipData != null && data.clipData!!.itemCount > 0) data.clipData!!.getItemAt(0).uri else null)
+                if (uri != null) {
+                    try {
+                        val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        try {
+                            contentResolver.takePersistableUriPermission(uri, flags)
+                        } catch (_: Exception) {}
+
+                        var fileName = "passlock_backup"
+                        try {
+                            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                if (nameIndex != -1 && cursor.moveToFirst()) {
+                                    fileName = cursor.getString(nameIndex) ?: fileName
+                                }
+                            }
+                        } catch (_: Exception) {}
+
+                        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+                        val contentStr = String(bytes, Charsets.UTF_8)
+
+                        val resMap = HashMap<String, String>()
+                        resMap["name"] = fileName
+                        resMap["content"] = contentStr
+                        resMap["uri"] = uri.toString()
+                        result.success(resMap)
+                    } catch (e: Exception) {
+                        result.error("READ_ERROR", "Lỗi đọc file: ${e.localizedMessage}", null)
+                    }
+                } else {
+                    result.success(null)
+                }
+            } else {
+                result.success(null)
+            }
+        }
+    }
+}
+EOF
+          sed "s/__PACKAGE_NAME__/com.example.passlock/g" /tmp/MainActivity.kt.tpl > android/app/src/main/kotlin/com/example/passlock/MainActivity.kt
+          find android/app/src/main -name "MainActivity.kt" | while read -r f; do
+            pkg=$(grep "^package " "$f" | head -n 1 | sed 's/package //')
+            if [ -n "$pkg" ]; then
+              sed "s/__PACKAGE_NAME__/$pkg/g" /tmp/MainActivity.kt.tpl > "$f"
+            fi
+          done
+          find android/app/src/main -name "MainActivity.java" -delete 2>/dev/null || true
+
+      # 6. Cài đặt các thư viện phụ thuộc (bao gồm file_picker: ^8.1.7)
+      - name: Install dependencies
+        run: |
+          flutter pub add flutter_secure_storage:^9.2.2 share_plus:^10.1.2 path_provider:^2.1.5 cupertino_icons:^1.0.8 uuid:^4.4.0 file_picker:^8.1.7 || true
           flutter pub get
 
+      # 7. Cấp quyền thực thi cho gradlew
       - name: Grant execute permission for gradlew
         run: |
           if [ -f "android/gradlew" ]; then
             chmod +x android/gradlew
           fi
 
+      # 8. Cấu hình compileSdk 36 & minSdk 23 cho toàn bộ app và tất cả plugins (khắc phục 100% checkReleaseAarMetadata)
       - name: Force compileSdk 36 across all Gradle modules
         run: |
           if [ -f "android/build.gradle" ]; then
             echo 'subprojects { afterEvaluate { project -> if (project.hasProperty("android")) { project.android { compileSdkVersion 36 } } } }' >> android/build.gradle
           fi
+
           if [ -f "android/app/build.gradle" ]; then
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle || true
-            sed -i 's/compileSdkVersion [0-9]\+/compileSdkVersion 36/g' android/app/build.gradle || true
+            sed -i 's/compileSdkVersion [0-9]+/compileSdkVersion 36/g' android/app/build.gradle || true
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' android/app/build.gradle || true
-            sed -i 's/minSdkVersion [0-9]\+/minSdkVersion 23/g' android/app/build.gradle || true
+            sed -i 's/minSdkVersion [0-9]+/minSdkVersion 23/g' android/app/build.gradle || true
           fi
+
           if [ -f "android/app/build.gradle.kts" ]; then
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts || true
-            sed -i 's/compileSdk = [0-9]\+/compileSdk = 36/g' android/app/build.gradle.kts || true
+            sed -i 's/compileSdk = [0-9]+/compileSdk = 36/g' android/app/build.gradle.kts || true
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts || true
-            sed -i 's/minSdk = [0-9]\+/minSdk = 23/g' android/app/build.gradle.kts || true
+            sed -i 's/minSdk = [0-9]+/minSdk = 23/g' android/app/build.gradle.kts || true
           fi
+
           echo "android.suppressUnsupportedCompileSdk=36" >> android/gradle.properties
 
+      # 9. Build file APK Release hoàn chỉnh
       - name: Build Android Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
+      # 10. Tải file APK lên GitHub Actions Artifacts để tải về điện thoại ngay lập tức
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
