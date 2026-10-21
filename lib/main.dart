@@ -183,8 +183,8 @@ class SecureStorageService {
 class BackupService {
   static String exportToCSV(List<CredentialItem> items) {
     final buffer = StringBuffer();
-    // Thêm ký tự UTF-8 BOM (﻿) ở đầu file để Microsoft Excel hiển thị chuẩn 100% tiếng Việt
-    buffer.write('﻿');
+    // Thêm ký tự UTF-8 BOM (\uFEFF) ở đầu file để Microsoft Excel hiển thị chuẩn 100% tiếng Việt
+    buffer.write('\uFEFF');
     buffer.writeln('"Dịch vụ","Danh mục","Tài khoản/Email","Mật khẩu","Ghi chú"');
     for (final it in items) {
       final s = it.service.replaceAll('"', '""');
@@ -199,8 +199,8 @@ class BackupService {
 
   static String exportToTXT(List<CredentialItem> items) {
     final buffer = StringBuffer();
-    // Thêm ký tự UTF-8 BOM (﻿) để Notepad hiển thị chuẩn font tiếng Việt
-    buffer.write('﻿');
+    // Thêm ký tự UTF-8 BOM (\uFEFF) để Notepad hiển thị chuẩn font tiếng Việt
+    buffer.write('\uFEFF');
     buffer.writeln('==================================================');
     buffer.writeln('       BẢN SAO LƯU MẬT KHẨU PASSLOCK VAULT        ');
     buffer.writeln('       Ngày xuất: ${DateTime.now().toLocal()}     ');
@@ -257,7 +257,7 @@ class BackupService {
 
     // Chèn chính xác mảng 3 byte UTF-8 BOM: 0xEF, 0xBB, 0xBF vào nhị phân file
     // Điều này đảm bảo 100% Microsoft Excel, Notepad, Google Sheets không bị lỗi font Tiếng Việt
-    final cleanContent = content.startsWith('﻿') ? content.substring(1) : content;
+    final cleanContent = content.startsWith('\uFEFF') ? content.substring(1) : content;
     final fileBytes = format == 'json'
         ? utf8.encode(content)
         : [0xEF, 0xBB, 0xBF, ...utf8.encode(cleanContent)];
@@ -291,7 +291,7 @@ class BackupService {
 
   static List<CredentialItem> parseUniversal(String content) {
     var clean = content.trim();
-    while (clean.isNotEmpty && (clean.startsWith('﻿') || clean.codeUnitAt(0) == 0xFEFF)) {
+    while (clean.isNotEmpty && (clean.startsWith('\uFEFF') || clean.codeUnitAt(0) == 0xFEFF)) {
       clean = clean.substring(1).trim();
     }
     final trimmed = clean;
@@ -331,11 +331,11 @@ class BackupService {
       String delimiter = ',';
       final commaCount = ','.allMatches(firstLine).length;
       final semiCount = ';'.allMatches(firstLine).length;
-      final tabCount = '	'.allMatches(firstLine).length;
+      final tabCount = '\t'.allMatches(firstLine).length;
       if (semiCount > commaCount && semiCount >= tabCount) {
         delimiter = ';';
       } else if (tabCount > commaCount && tabCount > semiCount) {
-        delimiter = '	';
+        delimiter = '\t';
       }
 
       if (lines.length > 1 || (lines.length == 1 && lines[0].contains(delimiter))) {
@@ -686,7 +686,7 @@ class GoogleDriveBackupService {
       final filename = 'PassLock_Backup_$dateStr.csv';
 
       final csvContent = BackupService.exportToCSV(credentials);
-      final cleanContent = csvContent.startsWith('﻿') ? csvContent.substring(1) : csvContent;
+      final cleanContent = csvContent.startsWith('\uFEFF') ? csvContent.substring(1) : csvContent;
       final fileBytes = <int>[0xEF, 0xBB, 0xBF, ...utf8.encode(cleanContent)];
 
       // 1. Lưu trực tiếp vào thư mục riêng PassLock_Backups
@@ -714,18 +714,9 @@ class GoogleDriveBackupService {
             });
 
             final bodyBytes = <int>[
-              ...utf8.encode('--$boundary
-Content-Type: application/json; charset=UTF-8
-
-$metadataJson
---$boundary
-Content-Type: text/csv; charset=UTF-8
-
-'),
+              ...utf8.encode('--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$metadataJson\r\n--$boundary\r\nContent-Type: text/csv; charset=UTF-8\r\n\r\n'),
               ...fileBytes,
-              ...utf8.encode('
---$boundary--
-'),
+              ...utf8.encode('\r\n--$boundary--\r\n'),
             ];
             req.add(bodyBytes);
             await req.close();
