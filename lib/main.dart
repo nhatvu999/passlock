@@ -8,6 +8,10 @@ import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:googleapis/drive/v3.dart' as drive;
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 
 // ============================================================================
 // 1. MODEL DỮ LIỆU TÀI KHOẢN (ACCOUNT CREDENTIAL MODEL)
@@ -501,6 +505,229 @@ class BackupService {
 }
 
 // ============================================================================
+// 3.5. DỊCH VỤ SAO LƯU GOOGLE DRIVE CLOUD (GOOGLE DRIVE AUTO-BACKUP SERVICE)
+// ============================================================================
+class GoogleAuthClient extends http.BaseClient {
+  final Map<String, String> _headers;
+  final http.Client _client = http.Client();
+
+  GoogleAuthClient(this._headers);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    return _client.send(request..headers.addAll(_headers));
+  }
+}
+
+class GoogleDriveBackupFile {
+  final String id;
+  final String name;
+  final DateTime createdAt;
+  final int sizeBytes;
+
+  GoogleDriveBackupFile({
+    required this.id,
+    required this.name,
+    required this.createdAt,
+    required this.sizeBytes,
+  });
+}
+
+class GoogleDriveBackupService {
+  final FlutterSecureStorage _storage = const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  static const String _prefAutoBackup = 'passlock_auto_backup_enabled';
+
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    scopes: <String>[
+      drive.DriveApi.driveFileScope,
+    ],
+  );
+
+  GoogleSignInAccount? _currentUser;
+  bool _autoBackupEnabled = true;
+
+  GoogleSignInAccount? get currentUser => _currentUser;
+  bool get isSignedIn => _currentUser != null;
+  bool get isAutoBackupEnabled => _autoBackupEnabled;
+
+  Future<void> init() async {
+    final autoPref = await _storage.read(key: _prefAutoBackup);
+    if (autoPref != null) {
+      _autoBackupEnabled = autoPref == 'true';
+    }
+    _googleSignIn.onCurrentUserChanged.listen((GoogleSignInAccount? account) {
+      _currentUser = account;
+    });
+    try {
+      _currentUser = await _googleSignIn.signInSilently();
+    } catch (_) {}
+  }
+
+  Future<void> setAutoBackupEnabled(bool enabled) async {
+    _autoBackupEnabled = enabled;
+    await _storage.write(key: _prefAutoBackup, value: enabled ? 'true' : 'false');
+  }
+
+  Future<GoogleSignInAccount?> signIn() async {
+    try {
+      _currentUser = await _googleSignIn.signIn();
+      return _currentUser;
+    } catch (e) {
+      debugPrint('Google Sign-In Error: $e');
+      return null;
+    }
+  }
+
+  Future<void> signOut() async {
+    try {
+      await _googleSignIn.signOut();
+      _currentUser = null;
+    } catch (e) {
+      debugPrint('Google Sign-Out Error: $e');
+    }
+  }
+
+  Future<drive.DriveApi?> _getDriveApi() async {
+    if (_currentUser == null) {
+      _currentUser = await _googleSignIn.signInSilently();
+    }
+    if (_currentUser == null) return null;
+
+    final authHeaders = await _currentUser!.authHeaders;
+    final authenticateClient = GoogleAuthClient(authHeaders);
+    return drive.DriveApi(authenticateClient);
+  }
+
+  Future<String?> _getOrCreateBackupFolder(drive.DriveApi driveApi) async {
+    try {
+      final fileList = await driveApi.files.list(
+        q: "mimeType = 'application/vnd.google-apps.folder' and name = 'PassLock_Backups' and trashed = false",
+        spaces: 'drive',
+        $fields: 'files(id, name)',
+      );
+      if (fileList.files != null && fileList.files!.isNotEmpty) {
+        return fileList.files!.first.id;
+      }
+
+      final folderMetadata = drive.File()
+        ..name = 'PassLock_Backups'
+        ..mimeType = 'application/vnd.google-apps.folder';
+
+      final createdFolder = await driveApi.files.create(
+        folderMetadata,
+        $fields: 'id',
+      );
+      return createdFolder.id;
+    } catch (e) {
+      debugPrint('Error finding/creating folder: $e');
+      return null;
+    }
+  }
+
+  Future<String?> backupToDrive(List<CredentialItem> credentials, {bool isAuto = false}) async {
+    try {
+      final driveApi = await _getDriveApi();
+      if (driveApi == null) return null;
+
+      final folderId = await _getOrCreateBackupFolder(driveApi);
+      if (folderId == null) return null;
+
+      final now = DateTime.now();
+      final formatter = DateFormat('yyyyMMdd_HHmmss');
+      final dateStr = formatter.format(now);
+      final filename = 'PassLock_Backup_$dateStr.csv';
+
+      final csvContent = BackupService.exportToCSV(credentials);
+      final bytes = utf8.encode(csvContent);
+
+      final fileToUpload = drive.File()
+        ..name = filename
+        ..parents = [folderId]
+        ..description = 'Bản sao lưu mật khẩu PassLock tạo tự động vào ${now.toIso8601String()}';
+
+      final media = drive.Media(
+        Stream.value(bytes),
+        bytes.length,
+        contentType: 'text/csv; charset=utf-8',
+      );
+
+      final uploaded = await driveApi.files.create(
+        fileToUpload,
+        uploadMedia: media,
+        $fields: 'id, name, createdTime',
+      );
+
+      return uploaded.name ?? filename;
+    } catch (e) {
+      debugPrint('Error uploading backup to Drive: $e');
+      return null;
+    }
+  }
+
+  Future<List<GoogleDriveBackupFile>> listBackups() async {
+    try {
+      final driveApi = await _getDriveApi();
+      if (driveApi == null) return [];
+
+      final folderId = await _getOrCreateBackupFolder(driveApi);
+      if (folderId == null) return [];
+
+      final fileList = await driveApi.files.list(
+        q: "'$folderId' in parents and trashed = false",
+        spaces: 'drive',
+        orderBy: 'createdTime desc',
+        pageSize: 20,
+        $fields: 'files(id, name, createdTime, size)',
+      );
+
+      final List<GoogleDriveBackupFile> backups = [];
+      if (fileList.files != null) {
+        for (final f in fileList.files!) {
+          backups.add(
+            GoogleDriveBackupFile(
+              id: f.id ?? '',
+              name: f.name ?? 'PassLock_Backup.csv',
+              createdAt: f.createdTime ?? DateTime.now(),
+              sizeBytes: int.tryParse(f.size ?? '0') ?? 0,
+            ),
+          );
+        }
+      }
+      return backups;
+    } catch (e) {
+      debugPrint('Error listing backups: $e');
+      return [];
+    }
+  }
+
+  Future<String?> downloadBackupContent(String fileId) async {
+    try {
+      final driveApi = await _getDriveApi();
+      if (driveApi == null) return null;
+
+      final dynamic response = await driveApi.files.get(
+        fileId,
+        downloadOptions: drive.DownloadOptions.fullMedia,
+      );
+
+      if (response is drive.Media) {
+        final List<int> bytes = [];
+        await for (final chunk in response.stream) {
+          bytes.addAll(chunk);
+        }
+        return utf8.decode(bytes);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error downloading file: $e');
+      return null;
+    }
+  }
+}
+
+// ============================================================================
 // 4. MÀN HÌNH KHÓA PASSCODE 6 SỐ (PASSCODE SCREEN)
 // ============================================================================
 class PasscodeScreen extends StatefulWidget {
@@ -820,12 +1047,16 @@ class _HomeScreenState extends State<HomeScreen> {
   String _searchQuery = '';
   late bool _isDarkMode;
   String? _expandedItemId;
+  final GoogleDriveBackupService _googleDriveService = GoogleDriveBackupService();
 
   @override
   void initState() {
     super.initState();
     _isDarkMode = widget.isDarkMode;
     _loadData();
+    _googleDriveService.init().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -902,7 +1133,37 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         await widget.storageService.addCredential(result);
       }
-      _loadData();
+      await _loadData();
+      _triggerGoogleDriveAutoBackup();
+    }
+  }
+
+  Future<void> _triggerGoogleDriveAutoBackup() async {
+    if (!_googleDriveService.isSignedIn || !_googleDriveService.isAutoBackupEnabled) {
+      return;
+    }
+    final items = await widget.storageService.getCredentials();
+    final filename = await _googleDriveService.backupToDrive(items, isAuto: true);
+    if (filename != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.cloud_done_rounded, color: Colors.greenAccent, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '☁️ Auto-Backup: Đã lưu "$filename" vào thư mục PassLock_Backups trên Google Drive',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF0F172A),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
   }
 
@@ -946,7 +1207,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirm == true) {
       await widget.storageService.deleteCredential(item.id);
-      _loadData();
+      await _loadData();
+      _triggerGoogleDriveAutoBackup();
     }
   }
 
@@ -1417,17 +1679,30 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _openBackupDialog() async {
+  Future<void> _showGoogleDriveBackupsList() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final backups = await _googleDriveService.listBackups();
+    if (mounted) Navigator.pop(context);
+    if (!mounted) return;
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => Padding(
+      builder: (ctx) => Container(
         padding: const EdgeInsets.all(20),
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.75,
+        ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Center(
@@ -1442,22 +1717,284 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Sao Lưu & Khôi Phục Dữ Liệu',
+              'Lịch Sử Sao Lưu Trên Google Drive',
               style: TextStyle(
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Text(
-              'Chọn file sao lưu để nạp lại hoặc xuất file bảo mật cất giữ an toàn:',
+              'Thư mục: PassLock_Backups/ (${backups.length} bản sao lưu)',
               style: TextStyle(
                 fontSize: 12,
                 color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            if (backups.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: Center(child: Text('Chưa có bản sao lưu nào trên Google Drive')),
+              )
+            else
+              Expanded(
+                child: ListView.separated(
+                  itemCount: backups.length,
+                  separatorBuilder: (_, __) => Divider(
+                    color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                  ),
+                  itemBuilder: (context, idx) {
+                    final item = backups[idx];
+                    final dateStr = DateFormat('dd/MM/yyyy HH:mm:ss').format(item.createdAt.toLocal());
+                    final sizeKb = (item.sizeBytes / 1024).toStringAsFixed(1);
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.table_chart_outlined, color: Color(0xFF38BDF8)),
+                      title: Text(
+                        item.name,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                      ),
+                      subtitle: Text(
+                        '$dateStr · $sizeKb KB',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                        ),
+                      ),
+                      trailing: TextButton.icon(
+                        icon: const Icon(Icons.restore_rounded, size: 16),
+                        label: const Text('Khôi phục', style: TextStyle(fontSize: 12)),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          final content = await _googleDriveService.downloadBackupContent(item.id);
+                          if (content != null) {
+                            final count = await BackupService.importUniversal(
+                              content: content,
+                              storageService: widget.storageService,
+                            );
+                            await _loadData();
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('✓ Đã khôi phục $count tài khoản từ "${item.name}"'),
+                                  backgroundColor: const Color(0xFF10B981),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openBackupDialog() async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: _isDarkMode ? const Color(0xFF334155) : Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Sao Lưu & Khôi Phục Dữ Liệu',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Tự động đồng bộ Google Drive hoặc xuất/nhập file bảo mật trên thiết bị:',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // 0. Thẻ Google Drive Cloud Sync & Auto-Backup
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: _isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _googleDriveService.isSignedIn
+                        ? const Color(0xFF0284C7).withOpacity(0.4)
+                        : (_isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.cloud_sync_rounded, color: Color(0xFF38BDF8), size: 22),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Google Drive Auto-Backup (Excel)',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                  color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                                ),
+                              ),
+                              Text(
+                                _googleDriveService.isSignedIn
+                                    ? (_googleDriveService.currentUser?.email ?? 'Đã kết nối Google Drive')
+                                    : 'Tự động lưu file Excel vào thư mục PassLock_Backups',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (_googleDriveService.isSignedIn)
+                          IconButton(
+                            icon: const Icon(Icons.logout_rounded, size: 18, color: Colors.redAccent),
+                            onPressed: () async {
+                              await _googleDriveService.signOut();
+                              setModalState(() {});
+                              if (mounted) setState(() {});
+                            },
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (!_googleDriveService.isSignedIn)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0284C7),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: const Icon(Icons.login_rounded, size: 18),
+                          label: const Text('Sign in with Google', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                          onPressed: () async {
+                            final acc = await _googleDriveService.signIn();
+                            setModalState(() {});
+                            if (mounted) setState(() {});
+                            if (acc != null && mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('✓ Đã kết nối Google Drive: ${acc.email}'),
+                                  backgroundColor: const Color(0xFF10B981),
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      )
+                    else ...[
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text(
+                          'Tự động sao lưu khi Thêm / Sửa / Xóa',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _isDarkMode ? Colors.white : const Color(0xFF0F172A),
+                          ),
+                        ),
+                        subtitle: Text(
+                          'Lưu vào thư mục PassLock_Backups kèm ngày giờ',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: _isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                          ),
+                        ),
+                        value: _googleDriveService.isAutoBackupEnabled,
+                        activeColor: const Color(0xFF38BDF8),
+                        onChanged: (val) async {
+                          await _googleDriveService.setAutoBackupEnabled(val);
+                          setModalState(() {});
+                          if (mounted) setState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.cloud_upload_outlined, size: 16),
+                              label: const Text('Sao Lưu Ngay', style: TextStyle(fontSize: 12)),
+                              onPressed: () async {
+                                Navigator.pop(ctx);
+                                final name = await _googleDriveService.backupToDrive(_credentials);
+                                if (name != null && mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('✓ Đã lưu "$name" vào Google Drive!'),
+                                      backgroundColor: const Color(0xFF10B981),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0284C7),
+                                foregroundColor: Colors.white,
+                              ),
+                              icon: const Icon(Icons.history_rounded, size: 16),
+                              label: const Text('Danh Sách File', style: TextStyle(fontSize: 12)),
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _showGoogleDriveBackupsList();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
 
             // 1. Nhập file bằng app duyệt file
             ListTile(
@@ -1579,7 +2116,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 BackupService.exportAndShare(context: context, items: _credentials, format: 'json');
               },
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
